@@ -6,51 +6,25 @@
   <title>SDDB — Container Dashboard</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://unpkg.com/htmx.org@1.9.12"></script>
-  <script src="https://unpkg.com/htmx.org@1.9.12/dist/ext/sse.js"></script>
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
     body { font-family: 'Inter', sans-serif; }
     code, .mono { font-family: 'JetBrains Mono', monospace; }
-    .gauge-bar {
-      height: 4px;
-      border-radius: 2px;
-      background: #1e293b;
-      overflow: hidden;
-    }
-    .gauge-fill {
-      height: 100%;
-      border-radius: 2px;
-      transition: width 0.4s ease;
-    }
+    .gauge-bar { height: 4px; border-radius: 2px; background: #1e293b; overflow: hidden; }
+    .gauge-fill { height: 100%; border-radius: 2px; transition: width 0.4s ease; }
     .card-hover { transition: border-color 0.15s, box-shadow 0.15s; }
     .card-hover:hover { border-color: #334155; box-shadow: 0 0 0 1px #334155; }
     .spin { animation: spin 1s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
     .pulse-dot { animation: pulse 2s ease-in-out infinite; }
-    @keyframes pulse {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0.3; }
-    }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
   </style>
-  <script>
-    tailwind.config = {
-      theme: {
-        extend: {
-          colors: {
-            surface: '#0f172a',
-            panel: '#1e293b',
-            card: '#0f172a',
-          }
-        }
-      }
-    }
-  </script>
 </head>
-<body class="bg-slate-950 text-slate-200 min-h-screen">
+<body class="bg-slate-950 text-slate-200 h-screen flex flex-col overflow-hidden">
 
   <!-- Header -->
-  <header class="border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-30">
-    <div class="max-w-screen-2xl mx-auto px-6 h-14 flex items-center justify-between">
+  <header class="border-b border-slate-800 bg-slate-900/80 backdrop-blur z-30 shrink-0">
+    <div class="px-6 h-14 flex items-center justify-between">
       <div class="flex items-center gap-3">
         <svg class="w-6 h-6 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
@@ -60,12 +34,10 @@
         <span class="text-slate-500 text-sm">Container Dashboard</span>
       </div>
       <div class="flex items-center gap-3">
-        <!-- Live indicator -->
-        <div class="flex items-center gap-2 text-xs text-slate-400" id="live-indicator">
+        <div class="flex items-center gap-2 text-xs text-slate-400">
           <span class="w-2 h-2 rounded-full bg-green-500 pulse-dot"></span>
           <span>Live</span>
         </div>
-        <!-- Add agent button -->
         <button onclick="document.getElementById('add-modal').classList.remove('hidden')"
           class="flex items-center gap-2 px-3 py-1.5 text-sm bg-blue-600 hover:bg-blue-500 text-white rounded-md transition-colors">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -75,8 +47,7 @@
         </button>
         {{if .AuthEnabled}}
         <a href="/logout"
-          class="flex items-center gap-1.5 px-3 py-1.5 text-sm text-slate-400 hover:text-white border border-slate-700 hover:border-slate-500 rounded-md transition-colors"
-          title="Sign out">
+          class="flex items-center gap-1.5 px-3 py-1.5 text-sm text-slate-400 hover:text-white border border-slate-700 hover:border-slate-500 rounded-md transition-colors">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
               d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h6a2 2 0 012 2v1"/>
@@ -88,22 +59,20 @@
     </div>
   </header>
 
-  <!-- Main dashboard — polled via HTMX every 5s as fallback; SSE is primary -->
-  <main class="max-w-screen-2xl mx-auto px-6 py-6">
-    <div id="dashboard-content"
-         hx-get="/api/dashboard"
-         hx-trigger="load, every 6s"
-         hx-swap="innerHTML"
-         hx-indicator="#poll-spinner">
-      <div class="flex items-center justify-center h-64 text-slate-500">
-        <svg class="w-6 h-6 spin mr-2" fill="none" viewBox="0 0 24 24">
-          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
-        </svg>
-        Loading…
-      </div>
+  <!-- Body: sidebar + main rendered together by HTMX -->
+  <div id="dashboard-content"
+       class="flex flex-1 min-h-0 overflow-hidden"
+       hx-get="/api/dashboard"
+       hx-trigger="load, every 6s"
+       hx-swap="innerHTML">
+    <div class="flex flex-1 items-center justify-center text-slate-500">
+      <svg class="w-6 h-6 spin mr-2" fill="none" viewBox="0 0 24 24">
+        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+      </svg>
+      Loading…
     </div>
-  </main>
+  </div>
 
   <!-- Add Agent Modal -->
   <div id="add-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
@@ -117,7 +86,6 @@
         </button>
       </div>
       <div class="p-6 space-y-4">
-        <!-- Manual add -->
         <div>
           <label class="block text-sm text-slate-400 mb-1">Agent address <span class="text-slate-500">(IP or host:port)</span></label>
           <div class="flex gap-2">
@@ -130,13 +98,10 @@
             </button>
           </div>
         </div>
-
         <div class="relative">
           <div class="absolute inset-0 flex items-center"><div class="w-full border-t border-slate-800"></div></div>
           <div class="relative flex justify-center"><span class="bg-slate-900 px-2 text-xs text-slate-500">or scan your network</span></div>
         </div>
-
-        <!-- Network scan -->
         <div>
           <div class="flex gap-2">
             <input id="scan-cidr" type="text" placeholder="192.168.1.0/24 (auto-detected if empty)"
@@ -148,7 +113,6 @@
           </div>
           <div id="scan-results" class="mt-3 space-y-2 max-h-56 overflow-y-auto"></div>
         </div>
-
         <p id="modal-error" class="hidden text-sm text-red-400"></p>
       </div>
     </div>
@@ -158,11 +122,9 @@
   <div id="toasts" class="fixed bottom-6 right-6 z-50 space-y-2"></div>
 
   <script>
-    // ── Helpers ──────────────────────────────────────────────────────────────
+    // ── Helpers ───────────────────────────────────────────────────────────────
 
-    function closeModal(id) {
-      document.getElementById(id).classList.add('hidden');
-    }
+    function closeModal(id) { document.getElementById(id).classList.add('hidden'); }
 
     function showToast(msg, ok) {
       const t = document.createElement('div');
@@ -174,9 +136,7 @@
       setTimeout(() => t.remove(), 4000);
     }
 
-    function refreshDashboard() {
-      htmx.trigger('#dashboard-content', 'load');
-    }
+    function refreshDashboard() { htmx.trigger('#dashboard-content', 'load'); }
 
     // ── Add agent ─────────────────────────────────────────────────────────────
 
@@ -184,7 +144,6 @@
       const addr = document.getElementById('agent-addr').value.trim();
       const label = document.getElementById('agent-label').value.trim();
       if (!addr) return;
-
       const res = await fetch('/api/agents', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -213,17 +172,14 @@
       const cidr = document.getElementById('scan-cidr').value.trim();
       const btn = document.getElementById('scan-btn');
       const results = document.getElementById('scan-results');
-
       btn.disabled = true;
       btn.textContent = 'Scanning…';
       results.innerHTML = '<p class="text-xs text-slate-500">Scanning network, this may take 20–30 seconds…</p>';
-
       const url = cidr ? `/api/scan?cidr=${encodeURIComponent(cidr)}` : '/api/scan';
       try {
         const res = await fetch(url);
         const text = await res.text();
         const found = text.trim().split('\n').filter(Boolean).map(l => JSON.parse(l));
-
         results.innerHTML = '';
         if (found.length === 0) {
           results.innerHTML = '<p class="text-xs text-slate-500">No agents found on this network.</p>';
@@ -237,9 +193,7 @@
                 <span class="ml-2 text-xs text-slate-400">${r.info.hostname || ''}</span>
               </div>
               <button onclick="addScannedAgent('${r.addr}')"
-                class="px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white text-xs rounded transition-colors">
-                Add
-              </button>`;
+                class="px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white text-xs rounded transition-colors">Add</button>`;
             results.appendChild(el);
           });
         }
@@ -265,9 +219,7 @@
     // ── Container commands ────────────────────────────────────────────────────
 
     async function containerAction(agentAddr, containerId, action) {
-      const label = action === 'upgrade' ? 'Upgrading…' : action.charAt(0).toUpperCase() + action.slice(1) + 'ing…';
-      showToast(label, true);
-
+      showToast(action === 'upgrade' ? 'Upgrading…' : action.charAt(0).toUpperCase() + action.slice(1) + 'ing…', true);
       const res = await fetch('/api/command', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -293,8 +245,7 @@
     const COLLAPSED_KEY = 'sddb-collapsed';
 
     function getCollapsed() {
-      try { return JSON.parse(localStorage.getItem(COLLAPSED_KEY) || '{}'); }
-      catch { return {}; }
+      try { return JSON.parse(localStorage.getItem(COLLAPSED_KEY) || '{}'); } catch { return {}; }
     }
 
     function togglePanel(agentId) {
@@ -320,17 +271,12 @@
       });
     }
 
-    // Re-apply after every HTMX swap (polling replaces innerHTML)
-    document.addEventListener('htmx:afterSwap', () => { applyCollapsed(); applyCollapsedCards(); });
-    document.addEventListener('DOMContentLoaded', () => { applyCollapsed(); applyCollapsedCards(); });
-
     // ── Card collapse ─────────────────────────────────────────────────────────
 
     const CARDS_KEY = 'sddb-cards';
 
     function getCollapsedCards() {
-      try { return JSON.parse(localStorage.getItem(CARDS_KEY) || '{}'); }
-      catch { return {}; }
+      try { return JSON.parse(localStorage.getItem(CARDS_KEY) || '{}'); } catch { return {}; }
     }
 
     function toggleCard(containerId) {
@@ -355,6 +301,75 @@
         }
       });
     }
+
+    // ── Host filter ───────────────────────────────────────────────────────────
+
+    const selectedHosts = new Set();
+
+    function toggleHost(hostId, event) {
+      if (event.shiftKey) {
+        // Shift+click: toggle individual host in/out of selection
+        if (selectedHosts.has(hostId)) {
+          selectedHosts.delete(hostId);
+        } else {
+          selectedHosts.add(hostId);
+        }
+      } else {
+        // Regular click: select only this host, or deselect if already the only one
+        if (selectedHosts.size === 1 && selectedHosts.has(hostId)) {
+          selectedHosts.clear();
+        } else {
+          selectedHosts.clear();
+          selectedHosts.add(hostId);
+        }
+      }
+      applyHostFilter();
+    }
+
+    function selectAllHosts() {
+      selectedHosts.clear();
+      applyHostFilter();
+    }
+
+    function applyHostFilter() {
+      const showAll = selectedHosts.size === 0;
+
+      // Highlight "All" entry
+      const allEntry = document.querySelector('[data-host-all]');
+      if (allEntry) {
+        allEntry.classList.toggle('text-white', showAll);
+        allEntry.classList.toggle('border-blue-500', showAll);
+        allEntry.classList.toggle('border-transparent', !showAll);
+      }
+
+      // Highlight individual host entries
+      document.querySelectorAll('[data-host-id]').forEach(el => {
+        const active = selectedHosts.has(el.dataset.hostId);
+        el.classList.toggle('border-blue-500', active);
+        el.classList.toggle('border-transparent', !active);
+        el.classList.toggle('bg-blue-600/10', active);
+        el.querySelector('.host-name')?.classList.toggle('text-white', active);
+        el.querySelector('.host-name')?.classList.toggle('text-slate-300', !active);
+      });
+
+      // Show/hide agent panels in main area
+      document.querySelectorAll('[data-agent-id]').forEach(panel => {
+        const visible = showAll || selectedHosts.has(panel.dataset.agentId);
+        panel.classList.toggle('hidden', !visible);
+      });
+    }
+
+    // Re-apply all state after every HTMX swap
+    document.addEventListener('htmx:afterSwap', () => {
+      applyCollapsed();
+      applyCollapsedCards();
+      applyHostFilter();
+    });
+    document.addEventListener('DOMContentLoaded', () => {
+      applyCollapsed();
+      applyCollapsedCards();
+      applyHostFilter();
+    });
   </script>
 </body>
 </html>
