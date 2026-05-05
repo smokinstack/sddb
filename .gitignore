@@ -1,0 +1,10 @@
+# binaries
+bin/
+
+# generated cert files
+certs/
+*.crt
+*.key
+
+# runtime state
+agents.json

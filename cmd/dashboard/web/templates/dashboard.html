@@ -1,0 +1,212 @@
+{{define "dashboard.html"}}
+{{if not .Agents}}
+  <div class="flex flex-col items-center justify-center h-64 text-slate-500 space-y-3">
+    <svg class="w-12 h-12 text-slate-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+        d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2"/>
+    </svg>
+    <p class="text-sm">No agents connected yet.</p>
+    <p class="text-xs text-slate-600">Click <strong class="text-slate-500">Add Agent</strong> to get started.</p>
+  </div>
+{{else}}
+  <div class="space-y-4">
+  {{range .Agents}}
+    {{template "agent-panel.html" .}}
+  {{end}}
+  </div>
+{{end}}
+{{end}}
+
+{{define "agent-panel.html"}}
+{{$running := runningContainers .LastStats.Containers}}
+{{$stopped := stoppedContainers .LastStats.Containers}}
+<div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden" data-agent-id="{{.ID}}">
+
+  <!-- Agent header -->
+  <div class="flex items-center justify-between px-5 py-3 border-b border-slate-800">
+    <div class="flex items-center gap-3">
+      {{if .Online}}
+        <span class="w-2.5 h-2.5 rounded-full bg-green-500 pulse-dot" title="Online"></span>
+      {{else}}
+        <span class="w-2.5 h-2.5 rounded-full bg-red-500" title="Offline"></span>
+      {{end}}
+      <div>
+        <span class="font-semibold text-white">
+          {{if .Label}}{{.Label}}{{else}}{{.LastStats.Agent.Hostname}}{{end}}
+        </span>
+        <span class="ml-2 text-xs text-slate-500 mono">{{.Addr}}</span>
+        {{if .Label}}
+          <span class="ml-1 text-xs text-slate-600">({{.LastStats.Agent.Hostname}})</span>
+        {{end}}
+      </div>
+    </div>
+    <div class="flex items-center gap-4 text-xs text-slate-500">
+      {{if .Online}}
+        <span>
+          <span class="text-green-400">{{len $running}}</span> running
+          {{if $stopped}}<span class="text-slate-600">/ {{len $stopped}} stopped</span>{{end}}
+        </span>
+        <span>updated {{since .LastSeen}}</span>
+      {{else}}
+        <span class="text-red-400">{{.ErrMessage}}</span>
+      {{end}}
+      <button onclick="removeAgent('{{.ID}}')"
+        class="text-slate-600 hover:text-red-400 transition-colors" title="Remove agent">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
+      <!-- Collapse toggle -->
+      <button onclick="togglePanel('{{.ID}}')" class="text-slate-500 hover:text-white transition-colors" title="Collapse / expand">
+        <svg class="w-4 h-4 chevron transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+        </svg>
+      </button>
+    </div>
+  </div>
+
+  <!-- Panel body (collapsible) -->
+  <div class="panel-body">
+    {{if .Online}}
+      {{if and (not $running) (not $stopped)}}
+        <div class="px-5 py-8 text-sm text-slate-500 text-center">No containers found on this host.</div>
+      {{else}}
+        <div class="p-4 space-y-4">
+
+          {{/* Running containers */}}
+          {{if $running}}
+            <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-3">
+              {{range $running}}
+                {{template "container-card.html" (dict "C" . "AgentAddr" $.Addr)}}
+              {{end}}
+            </div>
+          {{end}}
+
+          {{/* Stopped containers — separated by a labelled divider */}}
+          {{if $stopped}}
+            {{if $running}}
+              <div class="flex items-center gap-3 pt-1">
+                <div class="flex-1 border-t border-slate-800"></div>
+                <span class="text-xs text-slate-600 uppercase tracking-wider">Stopped</span>
+                <div class="flex-1 border-t border-slate-800"></div>
+              </div>
+            {{end}}
+            <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-3">
+              {{range $stopped}}
+                {{template "container-card.html" (dict "C" . "AgentAddr" $.Addr)}}
+              {{end}}
+            </div>
+          {{end}}
+
+        </div>
+      {{end}}
+    {{end}}
+  </div>
+
+</div>
+{{end}}
+
+{{define "container-card.html"}}
+{{$c := .C}}
+{{$addr := .AgentAddr}}
+<div class="bg-slate-950 border border-slate-800 rounded-lg card-hover flex flex-col" data-container-id="{{$c.ShortID}}">
+
+  <!-- Card header — always visible, click to collapse -->
+  <div class="flex items-start gap-2 p-4 cursor-pointer select-none"
+       onclick="toggleCard('{{$c.ShortID}}')" title="Click to collapse / expand">
+    <div class="min-w-0 flex-1">
+      <div class="flex items-center gap-1.5">
+        <svg class="card-chevron w-3.5 h-3.5 shrink-0 text-slate-600 transition-transform duration-200"
+             fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+        </svg>
+        <p class="font-medium text-white truncate" title="{{$c.Name}}">{{$c.Name}}</p>
+      </div>
+      <p class="text-xs text-slate-500 mono truncate mt-0.5 pl-5" title="{{$c.Image}}">{{$c.Image}}</p>
+    </div>
+    <div class="flex flex-col items-end gap-1 shrink-0">
+      <span class="px-2 py-0.5 text-xs rounded border {{stateBadge $c.State}} whitespace-nowrap">
+        {{$c.State}}
+      </span>
+      {{if $c.UpdateAvailable}}
+        <span class="px-2 py-0.5 text-xs rounded border bg-amber-500/20 text-amber-400 border-amber-500/30 whitespace-nowrap">
+          update available
+        </span>
+      {{end}}
+    </div>
+  </div>
+
+  <!-- Card body — collapsible -->
+  <div class="card-body flex flex-col gap-3 px-4 pb-4">
+
+    {{if eq $c.State "running"}}
+    <!-- Stats -->
+    <div class="space-y-2">
+      <div>
+        <div class="flex justify-between text-xs text-slate-400 mb-1">
+          <span>CPU</span>
+          <span class="mono">{{formatPercent $c.CPUPercent}}</span>
+        </div>
+        <div class="gauge-bar">
+          <div class="gauge-fill {{cpuColor $c.CPUPercent}}"
+               style="width: {{clamp $c.CPUPercent 0 100}}%"></div>
+        </div>
+      </div>
+      <div>
+        <div class="flex justify-between text-xs text-slate-400 mb-1">
+          <span>Memory</span>
+          <span class="mono">{{formatBytes $c.MemUsage}} / {{formatBytes $c.MemLimit}}</span>
+        </div>
+        <div class="gauge-bar">
+          <div class="gauge-fill {{memColor $c.MemPercent}}"
+               style="width: {{clamp $c.MemPercent 0 100}}%"></div>
+        </div>
+      </div>
+      <div class="flex gap-4 text-xs text-slate-400">
+        <span>↓ <span class="mono text-slate-300">{{formatRate $c.NetRxRate}}</span></span>
+        <span>↑ <span class="mono text-slate-300">{{formatRate $c.NetTxRate}}</span></span>
+        {{if $c.Ports}}
+          <span class="ml-auto text-slate-600 truncate mono" title="{{range $c.Ports}}{{.}} {{end}}">
+            {{index $c.Ports 0}}{{if gt (len $c.Ports) 1}}…{{end}}
+          </span>
+        {{end}}
+      </div>
+    </div>
+    {{else}}
+    <div class="text-xs text-slate-600 mono">{{$c.Status}}</div>
+    {{end}}
+
+    {{if $c.ComposeProject}}
+    <div class="text-xs text-slate-600 truncate" title="{{$c.ComposeFile}}">
+      <span class="text-slate-500">compose</span> {{$c.ComposeProject}}/{{$c.ComposeService}}
+    </div>
+    {{end}}
+
+    <!-- Action buttons -->
+    <div class="flex gap-2 pt-1 border-t border-slate-800/60">
+      {{if eq $c.State "running"}}
+        <button onclick="containerAction('{{$addr}}','{{$c.ID}}','stop')"
+          class="flex-1 py-1 text-xs text-slate-400 hover:text-red-400 hover:bg-red-500/10 rounded transition-colors">
+          Stop
+        </button>
+        <button onclick="containerAction('{{$addr}}','{{$c.ID}}','restart')"
+          class="flex-1 py-1 text-xs text-slate-400 hover:text-yellow-400 hover:bg-yellow-500/10 rounded transition-colors">
+          Restart
+        </button>
+      {{else}}
+        <button onclick="containerAction('{{$addr}}','{{$c.ID}}','start')"
+          class="flex-1 py-1 text-xs text-slate-400 hover:text-green-400 hover:bg-green-500/10 rounded transition-colors">
+          Start
+        </button>
+      {{end}}
+      {{if $c.UpdateAvailable}}
+        <button onclick="containerAction('{{$addr}}','{{$c.ID}}','upgrade')"
+          class="flex-1 py-1 text-xs text-amber-400 hover:text-amber-300 hover:bg-amber-500/10 rounded border border-amber-500/30 transition-colors font-medium">
+          Upgrade
+        </button>
+      {{end}}
+    </div>
+
+  </div><!-- /card-body -->
+</div>
+{{end}}

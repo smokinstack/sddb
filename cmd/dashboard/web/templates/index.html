@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SDDB — Container Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+  <script src="https://unpkg.com/htmx.org@1.9.12/dist/ext/sse.js"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+    body { font-family: 'Inter', sans-serif; }
+    code, .mono { font-family: 'JetBrains Mono', monospace; }
+    .gauge-bar {
+      height: 4px;
+      border-radius: 2px;
+      background: #1e293b;
+      overflow: hidden;
+    }
+    .gauge-fill {
+      height: 100%;
+      border-radius: 2px;
+      transition: width 0.4s ease;
+    }
+    .card-hover { transition: border-color 0.15s, box-shadow 0.15s; }
+    .card-hover:hover { border-color: #334155; box-shadow: 0 0 0 1px #334155; }
+    .spin { animation: spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .pulse-dot { animation: pulse 2s ease-in-out infinite; }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
+    }
+  </style>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            surface: '#0f172a',
+            panel: '#1e293b',
+            card: '#0f172a',
+          }
+        }
+      }
+    }
+  </script>
+</head>
+<body class="bg-slate-950 text-slate-200 min-h-screen">
+
+  <!-- Header -->
+  <header class="border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-30">
+    <div class="max-w-screen-2xl mx-auto px-6 h-14 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <svg class="w-6 h-6 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+            d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2"/>
+        </svg>
+        <span class="font-semibold text-white tracking-tight">SDDB</span>
+        <span class="text-slate-500 text-sm">Container Dashboard</span>
+      </div>
+      <div class="flex items-center gap-3">
+        <!-- Live indicator -->
+        <div class="flex items-center gap-2 text-xs text-slate-400" id="live-indicator">
+          <span class="w-2 h-2 rounded-full bg-green-500 pulse-dot"></span>
+          <span>Live</span>
+        </div>
+        <!-- Add agent button -->
+        <button onclick="document.getElementById('add-modal').classList.remove('hidden')"
+          class="flex items-center gap-2 px-3 py-1.5 text-sm bg-blue-600 hover:bg-blue-500 text-white rounded-md transition-colors">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+          </svg>
+          Add Agent
+        </button>
+        {{if .AuthEnabled}}
+        <a href="/logout"
+          class="flex items-center gap-1.5 px-3 py-1.5 text-sm text-slate-400 hover:text-white border border-slate-700 hover:border-slate-500 rounded-md transition-colors"
+          title="Sign out">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+              d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h6a2 2 0 012 2v1"/>
+          </svg>
+          Sign out
+        </a>
+        {{end}}
+      </div>
+    </div>
+  </header>
+
+  <!-- Main dashboard — polled via HTMX every 5s as fallback; SSE is primary -->
+  <main class="max-w-screen-2xl mx-auto px-6 py-6">
+    <div id="dashboard-content"
+         hx-get="/api/dashboard"
+         hx-trigger="load, every 6s"
+         hx-swap="innerHTML"
+         hx-indicator="#poll-spinner">
+      <div class="flex items-center justify-center h-64 text-slate-500">
+        <svg class="w-6 h-6 spin mr-2" fill="none" viewBox="0 0 24 24">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+        </svg>
+        Loading…
+      </div>
+    </div>
+  </main>
+
+  <!-- Add Agent Modal -->
+  <div id="add-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+    <div class="bg-slate-900 border border-slate-700 rounded-xl w-full max-w-lg mx-4 shadow-2xl">
+      <div class="flex items-center justify-between px-6 py-4 border-b border-slate-800">
+        <h2 class="font-semibold text-white">Add Agent</h2>
+        <button onclick="closeModal('add-modal')" class="text-slate-400 hover:text-white">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+      <div class="p-6 space-y-4">
+        <!-- Manual add -->
+        <div>
+          <label class="block text-sm text-slate-400 mb-1">Agent address <span class="text-slate-500">(IP or host:port)</span></label>
+          <div class="flex gap-2">
+            <input id="agent-addr" type="text" placeholder="192.168.1.10:8484"
+              class="flex-1 bg-slate-800 border border-slate-700 rounded-md px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500">
+            <input id="agent-label" type="text" placeholder="Label (optional)"
+              class="w-36 bg-slate-800 border border-slate-700 rounded-md px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500">
+            <button onclick="addAgent()" class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm rounded-md transition-colors whitespace-nowrap">
+              Add
+            </button>
+          </div>
+        </div>
+
+        <div class="relative">
+          <div class="absolute inset-0 flex items-center"><div class="w-full border-t border-slate-800"></div></div>
+          <div class="relative flex justify-center"><span class="bg-slate-900 px-2 text-xs text-slate-500">or scan your network</span></div>
+        </div>
+
+        <!-- Network scan -->
+        <div>
+          <div class="flex gap-2">
+            <input id="scan-cidr" type="text" placeholder="192.168.1.0/24 (auto-detected if empty)"
+              class="flex-1 bg-slate-800 border border-slate-700 rounded-md px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500">
+            <button onclick="startScan()" id="scan-btn"
+              class="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white text-sm rounded-md transition-colors whitespace-nowrap">
+              Scan Network
+            </button>
+          </div>
+          <div id="scan-results" class="mt-3 space-y-2 max-h-56 overflow-y-auto"></div>
+        </div>
+
+        <p id="modal-error" class="hidden text-sm text-red-400"></p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast container -->
+  <div id="toasts" class="fixed bottom-6 right-6 z-50 space-y-2"></div>
+
+  <script>
+    // ── Helpers ──────────────────────────────────────────────────────────────
+
+    function closeModal(id) {
+      document.getElementById(id).classList.add('hidden');
+    }
+
+    function showToast(msg, ok) {
+      const t = document.createElement('div');
+      t.className = `px-4 py-3 rounded-lg text-sm shadow-lg border ${ok
+        ? 'bg-green-900/80 border-green-700 text-green-200'
+        : 'bg-red-900/80 border-red-700 text-red-200'}`;
+      t.textContent = msg;
+      document.getElementById('toasts').appendChild(t);
+      setTimeout(() => t.remove(), 4000);
+    }
+
+    function refreshDashboard() {
+      htmx.trigger('#dashboard-content', 'load');
+    }
+
+    // ── Add agent ─────────────────────────────────────────────────────────────
+
+    async function addAgent() {
+      const addr = document.getElementById('agent-addr').value.trim();
+      const label = document.getElementById('agent-label').value.trim();
+      if (!addr) return;
+
+      const res = await fetch('/api/agents', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({addr, label}),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        closeModal('add-modal');
+        document.getElementById('agent-addr').value = '';
+        document.getElementById('agent-label').value = '';
+        showToast(`Agent ${addr} added`, true);
+        setTimeout(refreshDashboard, 1200);
+      } else {
+        document.getElementById('modal-error').textContent = data.error || 'Failed to add agent';
+        document.getElementById('modal-error').classList.remove('hidden');
+      }
+    }
+
+    document.getElementById('agent-addr').addEventListener('keydown', e => {
+      if (e.key === 'Enter') addAgent();
+    });
+
+    // ── Network scan ──────────────────────────────────────────────────────────
+
+    async function startScan() {
+      const cidr = document.getElementById('scan-cidr').value.trim();
+      const btn = document.getElementById('scan-btn');
+      const results = document.getElementById('scan-results');
+
+      btn.disabled = true;
+      btn.textContent = 'Scanning…';
+      results.innerHTML = '<p class="text-xs text-slate-500">Scanning network, this may take 20–30 seconds…</p>';
+
+      const url = cidr ? `/api/scan?cidr=${encodeURIComponent(cidr)}` : '/api/scan';
+      try {
+        const res = await fetch(url);
+        const text = await res.text();
+        const found = text.trim().split('\n').filter(Boolean).map(l => JSON.parse(l));
+
+        results.innerHTML = '';
+        if (found.length === 0) {
+          results.innerHTML = '<p class="text-xs text-slate-500">No agents found on this network.</p>';
+        } else {
+          found.forEach(r => {
+            const el = document.createElement('div');
+            el.className = 'flex items-center justify-between bg-slate-800 rounded-md px-3 py-2';
+            el.innerHTML = `
+              <div>
+                <span class="text-sm text-white mono">${r.addr}</span>
+                <span class="ml-2 text-xs text-slate-400">${r.info.hostname || ''}</span>
+              </div>
+              <button onclick="addScannedAgent('${r.addr}')"
+                class="px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white text-xs rounded transition-colors">
+                Add
+              </button>`;
+            results.appendChild(el);
+          });
+        }
+      } catch(e) {
+        results.innerHTML = `<p class="text-xs text-red-400">Scan failed: ${e.message}</p>`;
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Scan Network';
+      }
+    }
+
+    async function addScannedAgent(addr) {
+      await fetch('/api/agents', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({addr}),
+      });
+      closeModal('add-modal');
+      showToast(`Agent ${addr} added`, true);
+      setTimeout(refreshDashboard, 1200);
+    }
+
+    // ── Container commands ────────────────────────────────────────────────────
+
+    async function containerAction(agentAddr, containerId, action) {
+      const label = action === 'upgrade' ? 'Upgrading…' : action.charAt(0).toUpperCase() + action.slice(1) + 'ing…';
+      showToast(label, true);
+
+      const res = await fetch('/api/command', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({agent_addr: agentAddr, container_id: containerId, action}),
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast(`${action} succeeded`, true);
+        setTimeout(refreshDashboard, 2000);
+      } else {
+        showToast(`${action} failed: ${data.message}`, false);
+      }
+    }
+
+    async function removeAgent(id) {
+      if (!confirm('Remove this agent from the dashboard?')) return;
+      await fetch(`/api/agents/${encodeURIComponent(id)}`, {method: 'DELETE'});
+      refreshDashboard();
+    }
+
+    // ── Panel collapse ────────────────────────────────────────────────────────
+
+    const COLLAPSED_KEY = 'sddb-collapsed';
+
+    function getCollapsed() {
+      try { return JSON.parse(localStorage.getItem(COLLAPSED_KEY) || '{}'); }
+      catch { return {}; }
+    }
+
+    function togglePanel(agentId) {
+      const state = getCollapsed();
+      state[agentId] = !state[agentId];
+      localStorage.setItem(COLLAPSED_KEY, JSON.stringify(state));
+      applyCollapsed();
+    }
+
+    function applyCollapsed() {
+      const state = getCollapsed();
+      document.querySelectorAll('[data-agent-id]').forEach(panel => {
+        const id = panel.dataset.agentId;
+        const body = panel.querySelector('.panel-body');
+        const chevron = panel.querySelector('.chevron');
+        if (state[id]) {
+          body?.classList.add('hidden');
+          chevron?.style.setProperty('transform', 'rotate(180deg)');
+        } else {
+          body?.classList.remove('hidden');
+          chevron?.style.removeProperty('transform');
+        }
+      });
+    }
+
+    // Re-apply after every HTMX swap (polling replaces innerHTML)
+    document.addEventListener('htmx:afterSwap', () => { applyCollapsed(); applyCollapsedCards(); });
+    document.addEventListener('DOMContentLoaded', () => { applyCollapsed(); applyCollapsedCards(); });
+
+    // ── Card collapse ─────────────────────────────────────────────────────────
+
+    const CARDS_KEY = 'sddb-cards';
+
+    function getCollapsedCards() {
+      try { return JSON.parse(localStorage.getItem(CARDS_KEY) || '{}'); }
+      catch { return {}; }
+    }
+
+    function toggleCard(containerId) {
+      const state = getCollapsedCards();
+      state[containerId] = !state[containerId];
+      localStorage.setItem(CARDS_KEY, JSON.stringify(state));
+      applyCollapsedCards();
+    }
+
+    function applyCollapsedCards() {
+      const state = getCollapsedCards();
+      document.querySelectorAll('[data-container-id]').forEach(card => {
+        const id = card.dataset.containerId;
+        const body = card.querySelector('.card-body');
+        const chevron = card.querySelector('.card-chevron');
+        if (state[id]) {
+          body?.classList.add('hidden');
+          chevron?.style.setProperty('transform', 'rotate(180deg)');
+        } else {
+          body?.classList.remove('hidden');
+          chevron?.style.removeProperty('transform');
+        }
+      });
+    }
+  </script>
+</body>
+</html>
