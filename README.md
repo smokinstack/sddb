@@ -99,19 +99,20 @@ scp <name>-agent.crt <name>-agent.key <name>-ca.crt user@<host>:/etc/sddb/
 
 ### 2. Install the agent on the host
 
-Copy the binary and install the service:
+From your dev/dashboard machine, copy the binary and service file across:
 
 ```bash
-scp bin/sddb-agent user@<host>:/usr/local/bin/sddb-agent
-# then on the agent host:
-sudo make install-agent-service
+scp bin/sddb-agent user@<host>:/tmp/sddb-agent
+scp deploy/sddb-agent.service user@<host>:/tmp/sddb-agent.service
 ```
 
-Or just copy the files manually:
+Then SSH in and install them:
+
 ```bash
-scp bin/sddb-agent user@<host>:/usr/local/bin/
-scp deploy/sddb-agent.service user@<host>:/tmp/
-ssh user@<host> "sudo install -m 644 /tmp/sddb-agent.service /etc/systemd/system/ && sudo systemctl daemon-reload"
+ssh user@<host>
+sudo install -m 755 /tmp/sddb-agent /usr/local/bin/sddb-agent
+sudo install -m 644 /tmp/sddb-agent.service /etc/systemd/system/sddb-agent.service
+sudo systemctl daemon-reload
 ```
 
 ### 3. Configure mTLS on the agent
