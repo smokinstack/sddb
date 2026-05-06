@@ -1,3 +1,49 @@
+{{define "sidebar.html"}}
+<button data-host-all onclick="selectAllHosts()"
+  class="w-full text-left flex items-center gap-2 px-3 py-2 border-l-2 border-blue-500 text-white hover:bg-slate-800/50 transition-colors">
+  <span class="text-xs font-medium">All Hosts</span>
+  {{if .Agents}}<span class="ml-auto text-xs text-slate-500">{{len .Agents}}</span>{{end}}
+</button>
+{{range .Agents}}
+{{$running := runningContainers .LastStats.Containers}}
+{{$stopped := stoppedContainers .LastStats.Containers}}
+<button data-host-id="{{.ID}}" onclick="toggleHost('{{.ID}}', event)"
+  class="w-full text-left flex items-center gap-2 px-3 py-2 border-l-2 border-transparent hover:bg-slate-800/50 transition-colors">
+  {{if .Online}}
+    <span class="w-2 h-2 rounded-full bg-green-500 shrink-0" title="Online"></span>
+  {{else}}
+    <span class="w-2 h-2 rounded-full bg-red-500/70 shrink-0" title="Offline"></span>
+  {{end}}
+  <span class="host-name text-xs text-slate-300 truncate min-w-0 flex-1">
+    {{if .Label}}{{.Label}}{{else if .LastStats.Agent.Hostname}}{{.LastStats.Agent.Hostname}}{{else}}{{.Addr}}{{end}}
+  </span>
+  <span class="shrink-0 flex items-center gap-1.5 ml-1">
+    {{if $running}}<span class="text-xs text-green-400 tabular-nums">{{len $running}}</span>{{end}}
+    {{if $stopped}}<span class="text-xs text-slate-600 tabular-nums">{{len $stopped}}</span>{{end}}
+  </span>
+</button>
+{{end}}
+{{end}}
+
+{{define "main.html"}}
+{{if not .Agents}}
+  <div class="flex flex-col items-center justify-center h-64 text-slate-500 space-y-3">
+    <svg class="w-12 h-12 text-slate-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+        d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2"/>
+    </svg>
+    <p class="text-sm">No agents connected yet.</p>
+    <p class="text-xs text-slate-600">Click <strong class="text-slate-500">Add Agent</strong> to get started.</p>
+  </div>
+{{else}}
+  <div class="space-y-4">
+  {{range .Agents}}
+    {{template "agent-panel.html" .}}
+  {{end}}
+  </div>
+{{end}}
+{{end}}
+
 {{define "dashboard.html"}}
 <!-- Left sidebar -->
 <aside class="w-52 shrink-0 border-r border-slate-800 bg-slate-900/50 flex flex-col overflow-hidden">

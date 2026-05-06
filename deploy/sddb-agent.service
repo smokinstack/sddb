@@ -1,0 +1,12 @@
+[Unit]
+Description=SDDB Container Agent
+After=docker.service
+Requires=docker.service
+
+[Service]
+ExecStart=/usr/local/bin/sddb-agent -addr :8484 -interval 5s
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target

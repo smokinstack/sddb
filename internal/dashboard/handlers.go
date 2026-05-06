@@ -69,6 +69,8 @@ func (d *Dashboard) Handler() http.Handler {
 	mux.HandleFunc("/api/scan", d.handleScan)
 	mux.HandleFunc("/api/command", d.handleCommand)
 	mux.HandleFunc("/api/dashboard", d.handleDashboardFragment)
+	mux.HandleFunc("/api/sidebar", d.handleSidebarFragment)
+	mux.HandleFunc("/api/main", d.handleMainFragment)
 	mux.HandleFunc("/events", d.handleSSE)
 
 	if d.creds != nil {
@@ -151,6 +153,22 @@ func (d *Dashboard) handleDashboardFragment(w http.ResponseWriter, r *http.Reque
 	}
 }
 
+func (d *Dashboard) handleSidebarFragment(w http.ResponseWriter, r *http.Request) {
+	agents := d.state.All()
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := d.tmpl.ExecuteTemplate(w, "sidebar.html", templateData(agents)); err != nil {
+		log.Printf("sidebar template error: %v", err)
+	}
+}
+
+func (d *Dashboard) handleMainFragment(w http.ResponseWriter, r *http.Request) {
+	agents := d.state.All()
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := d.tmpl.ExecuteTemplate(w, "main.html", templateData(agents)); err != nil {
+		log.Printf("main template error: %v", err)
+	}
+}
+
 // handleAgents: GET lists agents, POST adds an agent.
 func (d *Dashboard) handleAgents(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
@@ -222,14 +240,25 @@ func (d *Dashboard) handleScan(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
-	results, err := ScanNetwork(ctx, cidr, d.agentPort, 50)
+	results, err := ScanNetwork(ctx, cidr, d.agentPort, 50, d.tlsConfig)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
+	// Build set of already-added online agents so scan can skip them
+	knownOnline := make(map[string]bool)
+	for _, a := range d.state.All() {
+		if a.Online {
+			knownOnline[a.Addr] = true
+		}
+	}
+
 	enc := json.NewEncoder(w)
 	for result := range results {
+		if knownOnline[result.Addr] {
+			continue
+		}
 		enc.Encode(result)
 		if canFlush {
 			flusher.Flush()

@@ -59,18 +59,32 @@
     </div>
   </header>
 
-  <!-- Body: sidebar + main rendered together by HTMX -->
-  <div id="dashboard-content"
-       class="flex flex-1 min-h-0 overflow-hidden"
-       hx-get="/api/dashboard"
-       hx-trigger="load, every 6s"
-       hx-swap="innerHTML">
-    <div class="flex flex-1 items-center justify-center text-slate-500">
-      <svg class="w-6 h-6 spin mr-2" fill="none" viewBox="0 0 24 24">
-        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
-      </svg>
-      Loading…
+  <!-- Body: permanent sidebar + main; only their inner content is swapped by HTMX -->
+  <div id="dashboard-content" class="flex flex-1 min-h-0 overflow-hidden">
+    <!-- Sidebar — HTMX swaps only the list items inside -->
+    <aside class="w-52 shrink-0 border-r border-slate-800 bg-slate-900/50 flex flex-col overflow-hidden">
+      <div class="shrink-0 px-4 py-3 border-b border-slate-800">
+        <span class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Hosts</span>
+      </div>
+      <div id="sidebar-list"
+           class="flex-1 overflow-y-auto py-1"
+           hx-get="/api/sidebar"
+           hx-trigger="load, every 6s"
+           hx-swap="innerHTML"></div>
+    </aside>
+    <!-- Main panel — HTMX swaps only the panel content; scrollTop is never reset -->
+    <div id="main-content"
+         class="flex-1 overflow-y-auto p-6"
+         hx-get="/api/main"
+         hx-trigger="load, every 6s"
+         hx-swap="innerHTML">
+      <div class="flex items-center justify-center h-64 text-slate-500">
+        <svg class="w-6 h-6 spin mr-2" fill="none" viewBox="0 0 24 24">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+        </svg>
+        Loading…
+      </div>
     </div>
   </div>
 
@@ -136,7 +150,10 @@
       setTimeout(() => t.remove(), 4000);
     }
 
-    function refreshDashboard() { htmx.trigger('#dashboard-content', 'load'); }
+    function refreshDashboard() {
+      htmx.trigger('#sidebar-list', 'load');
+      htmx.trigger('#main-content', 'load');
+    }
 
     // ── Add agent ─────────────────────────────────────────────────────────────
 

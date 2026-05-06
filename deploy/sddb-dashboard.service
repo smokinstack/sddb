@@ -1,0 +1,13 @@
+[Unit]
+Description=SDDB Container Dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/sddb-dashboard -addr :8080 -poll 5s -data-dir /var/lib/sddb
+Restart=on-failure
+RestartSec=5s
+StateDirectory=sddb
+
+[Install]
+WantedBy=multi-user.target

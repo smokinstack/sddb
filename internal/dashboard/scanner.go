@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -21,7 +22,7 @@ type ScanResult struct {
 
 // ScanNetwork scans the given CIDR for hosts listening on agentPort.
 // Results are sent to the returned channel. The channel is closed when scanning completes.
-func ScanNetwork(ctx context.Context, cidr string, agentPort int, concurrency int) (<-chan ScanResult, error) {
+func ScanNetwork(ctx context.Context, cidr string, agentPort int, concurrency int, tlsCfg *tls.Config) (<-chan ScanResult, error) {
 	ips, err := hostsInCIDR(cidr)
 	if err != nil {
 		return nil, fmt.Errorf("parse CIDR: %w", err)
@@ -40,7 +41,7 @@ func ScanNetwork(ctx context.Context, cidr string, agentPort int, concurrency in
 			defer func() { <-sem }()
 
 			addr := fmt.Sprintf("%s:%d", ip, agentPort)
-			if result, ok := probeAgent(ctx, addr); ok {
+			if result, ok := probeAgent(ctx, addr, tlsCfg); ok {
 				select {
 				case results <- result:
 				case <-ctx.Done():
@@ -57,7 +58,7 @@ func ScanNetwork(ctx context.Context, cidr string, agentPort int, concurrency in
 	return results, nil
 }
 
-func probeAgent(ctx context.Context, addr string) (ScanResult, bool) {
+func probeAgent(ctx context.Context, addr string, tlsCfg *tls.Config) (ScanResult, bool) {
 	// Quick TCP dial first (much faster than HTTP timeout)
 	dialCtx, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
 	defer cancel()
@@ -70,9 +71,15 @@ func probeAgent(ctx context.Context, addr string) (ScanResult, bool) {
 	conn.Close()
 
 	// TCP is open — now verify it's actually an sddb agent
-	url := fmt.Sprintf("http://%s/api/info", addr)
+	scheme := "http"
+	var transport http.RoundTripper
+	if tlsCfg != nil {
+		scheme = "https"
+		transport = &http.Transport{TLSClientConfig: tlsCfg}
+	}
+	url := fmt.Sprintf("%s://%s/api/info", scheme, addr)
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	client := &http.Client{Timeout: 2 * time.Second}
+	client := &http.Client{Timeout: 2 * time.Second, Transport: transport}
 	resp, err := client.Do(req)
 	if err != nil {
 		return ScanResult{}, false
