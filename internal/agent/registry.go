@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -35,6 +36,9 @@ func CheckUpdateAvailable(ctx context.Context, imageName string, repoDigests []s
 		return false, nil // never pulled from a registry, can't compare
 	}
 
+	if remoteDigest != localDigest {
+		log.Printf("digest mismatch for %s: remote=%s local=%s", imageName, remoteDigest, localDigest)
+	}
 	return remoteDigest != localDigest, nil
 }
 
@@ -85,7 +89,9 @@ func fetchRemoteDigest(ctx context.Context, ref imageRef) (string, error) {
 
 	url := fmt.Sprintf("https://%s/v2/%s/manifests/%s", ref.registry, ref.name, ref.tag)
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	req.Header.Set("Accept", "application/vnd.docker.distribution.manifest.v2+json,application/vnd.oci.image.manifest.v1+json,application/vnd.oci.image.index.v1+json")
+	// Include manifest list types first so registries return the multi-arch
+	// manifest list digest, which matches what Docker stores in RepoDigests.
+	req.Header.Set("Accept", "application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.v2+json,application/vnd.oci.image.manifest.v1+json")
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}

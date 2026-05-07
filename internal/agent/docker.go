@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
+	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/jester/sddb/internal/types"
 )
 
@@ -242,12 +244,6 @@ func (d *DockerClient) upgradeCLI(ctx context.Context, info dockertypes.Containe
 	io.Copy(io.Discard, reader)
 	reader.Close()
 
-	// Check we actually got a newer image
-	newImg, _, err := d.cli.ImageInspectWithRaw(ctx, imageName)
-	if err != nil {
-		return fmt.Errorf("inspect new image: %w", err)
-	}
-
 	// Stop and remove the old container
 	timeout := 10
 	if err := d.cli.ContainerStop(ctx, info.ID, container.StopOptions{Timeout: &timeout}); err != nil {
@@ -257,16 +253,19 @@ func (d *DockerClient) upgradeCLI(ctx context.Context, info dockertypes.Containe
 		return fmt.Errorf("remove: %w", err)
 	}
 
-	// Recreate with the new image ID
+	// Recreate using the original image name (tag), not the sha256 ID, so
+	// that future update checks and pulls continue to work against the registry.
+	// Docker inspect returns names with a leading "/"; strip it for ContainerCreate.
 	cfg := info.Config
-	cfg.Image = newImg.ID
+	cfg.Image = imageName
 
 	hostCfg := info.HostConfig
 	netCfg := &network.NetworkingConfig{
 		EndpointsConfig: info.NetworkSettings.Networks,
 	}
 
-	created, err := d.cli.ContainerCreate(ctx, cfg, hostCfg, netCfg, nil, info.Name)
+	name := strings.TrimPrefix(info.Name, "/")
+	created, err := d.cli.ContainerCreate(ctx, cfg, hostCfg, netCfg, nil, name)
 	if err != nil {
 		return fmt.Errorf("create: %w", err)
 	}
@@ -278,6 +277,33 @@ func (d *DockerClient) upgradeCLI(ctx context.Context, info dockertypes.Containe
 func (d *DockerClient) PruneImages(ctx context.Context) error {
 	_, err := d.cli.ImagesPrune(ctx, filters.Args{})
 	return err
+}
+
+// GetLogs returns the last `tail` lines of stdout+stderr for a container.
+func (d *DockerClient) GetLogs(ctx context.Context, containerID, tail string) (string, error) {
+	info, err := d.cli.ContainerInspect(ctx, containerID)
+	if err != nil {
+		return "", fmt.Errorf("inspect: %w", err)
+	}
+
+	rc, err := d.cli.ContainerLogs(ctx, containerID, container.LogsOptions{
+		ShowStdout: true,
+		ShowStderr: true,
+		Tail:       tail,
+		Timestamps: true,
+	})
+	if err != nil {
+		return "", fmt.Errorf("logs: %w", err)
+	}
+	defer rc.Close()
+
+	var buf bytes.Buffer
+	if info.Config.Tty {
+		io.Copy(&buf, rc)
+	} else {
+		stdcopy.StdCopy(&buf, &buf, rc)
+	}
+	return buf.String(), nil
 }
 
 func formatPorts(ports []dockertypes.Port) []string {

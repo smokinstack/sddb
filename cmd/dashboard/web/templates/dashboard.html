@@ -7,6 +7,7 @@
 {{range .Agents}}
 {{$running := runningContainers .LastStats.Containers}}
 {{$stopped := stoppedContainers .LastStats.Containers}}
+{{$updates := updatesAvailable .LastStats.Containers}}
 <button data-host-id="{{.ID}}" onclick="toggleHost('{{.ID}}', event)"
   class="w-full text-left flex items-center gap-2 px-3 py-2 border-l-2 border-transparent hover:bg-slate-800/50 transition-colors">
   {{if .Online}}
@@ -20,6 +21,7 @@
   <span class="shrink-0 flex items-center gap-1.5 ml-1">
     {{if $running}}<span class="text-xs text-green-400 tabular-nums">{{len $running}}</span>{{end}}
     {{if $stopped}}<span class="text-xs text-slate-600 tabular-nums">{{len $stopped}}</span>{{end}}
+    {{if $updates}}<span class="text-xs text-amber-400 tabular-nums" title="{{$updates}} update(s) available">{{$updates}}↑</span>{{end}}
   </span>
 </button>
 {{end}}
@@ -291,6 +293,20 @@
           Start
         </button>
       {{end}}
+      <button onclick="viewLogs('{{$addr}}','{{$c.ID}}','{{$c.Name}}','{{$c.Image}}')"
+        class="flex-1 py-1 text-xs text-slate-400 hover:text-blue-400 hover:bg-blue-500/10 rounded transition-colors">
+        Logs
+      </button>
+      <button onclick="healthCheck('{{$addr}}','{{$c.ID}}','{{$c.Name}}','{{$c.Image}}')"
+        class="flex-1 py-1 text-xs text-slate-400 hover:text-purple-400 hover:bg-purple-500/10 rounded transition-colors">
+        Health
+      </button>
+      <button data-au-key="{{$addr}}::{{$c.Name}}"
+        onclick="toggleAutoUpdate('{{$addr}}','{{$c.Name}}')"
+        class="px-2 py-1 text-xs rounded border text-slate-600 border-slate-700 transition-colors"
+        title="Auto-update: off">
+        Auto
+      </button>
       {{if $c.UpdateAvailable}}
         <button onclick="containerAction('{{$addr}}','{{$c.ID}}','upgrade')"
           class="flex-1 py-1 text-xs text-amber-400 hover:text-amber-300 hover:bg-amber-500/10 rounded border border-amber-500/30 transition-colors font-medium">

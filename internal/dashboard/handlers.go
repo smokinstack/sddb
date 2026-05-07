@@ -16,7 +16,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jester/sddb/internal/ai"
 	"github.com/jester/sddb/internal/auth"
+	"github.com/jester/sddb/internal/config"
 	"github.com/jester/sddb/internal/types"
 )
 
@@ -31,14 +33,18 @@ type Dashboard struct {
 	tlsConfig *tls.Config // nil = plain HTTP to agents
 	creds     *auth.Credentials
 	sessions  *auth.Sessions
+	ai        *ai.Client
+	cfg       *config.Store
 }
 
 // Config holds everything NewDashboard needs.
 type Config struct {
 	AgentPort int
-	TLS       *tls.Config        // nil = plain HTTP to agents
-	Creds     *auth.Credentials  // nil = no login required
+	TLS       *tls.Config       // nil = plain HTTP to agents
+	Creds     *auth.Credentials // nil = no login required
 	Sessions  *auth.Sessions
+	AI        *ai.Client
+	Cfg       *config.Store
 }
 
 func NewDashboard(state *State, poller *Poller, notify chan struct{}, webFS fs.FS, cfg Config) (*Dashboard, error) {
@@ -56,6 +62,8 @@ func NewDashboard(state *State, poller *Poller, notify chan struct{}, webFS fs.F
 		tlsConfig: cfg.TLS,
 		creds:     cfg.Creds,
 		sessions:  cfg.Sessions,
+		ai:        cfg.AI,
+		cfg:       cfg.Cfg,
 	}, nil
 }
 
@@ -71,6 +79,9 @@ func (d *Dashboard) Handler() http.Handler {
 	mux.HandleFunc("/api/dashboard", d.handleDashboardFragment)
 	mux.HandleFunc("/api/sidebar", d.handleSidebarFragment)
 	mux.HandleFunc("/api/main", d.handleMainFragment)
+	mux.HandleFunc("/api/logs", d.handleLogs)
+	mux.HandleFunc("/api/ai", d.handleAI)
+	mux.HandleFunc("/api/config", d.handleConfig)
 	mux.HandleFunc("/events", d.handleSSE)
 
 	if d.creds != nil {
@@ -88,6 +99,12 @@ func (d *Dashboard) requireAuth(next http.Handler) http.Handler {
 		}
 		cookie, err := r.Cookie(auth.SessionCookie)
 		if err != nil || !d.sessions.Valid(cookie.Value) {
+			if r.Header.Get("HX-Request") == "true" {
+				// Tell HTMX to do a full page redirect rather than swap the login HTML into a panel
+				w.Header().Set("HX-Redirect", "/login")
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
 			http.Redirect(w, r, "/login", http.StatusSeeOther)
 			return
 		}
@@ -148,7 +165,7 @@ func (d *Dashboard) handleIndex(w http.ResponseWriter, r *http.Request) {
 func (d *Dashboard) handleDashboardFragment(w http.ResponseWriter, r *http.Request) {
 	agents := d.state.All()
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := d.tmpl.ExecuteTemplate(w, "dashboard.html", templateData(agents)); err != nil {
+	if err := d.tmpl.ExecuteTemplate(w, "dashboard.html", d.templateData(agents)); err != nil {
 		log.Printf("template error: %v", err)
 	}
 }
@@ -156,15 +173,188 @@ func (d *Dashboard) handleDashboardFragment(w http.ResponseWriter, r *http.Reque
 func (d *Dashboard) handleSidebarFragment(w http.ResponseWriter, r *http.Request) {
 	agents := d.state.All()
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := d.tmpl.ExecuteTemplate(w, "sidebar.html", templateData(agents)); err != nil {
+	if err := d.tmpl.ExecuteTemplate(w, "sidebar.html", d.templateData(agents)); err != nil {
 		log.Printf("sidebar template error: %v", err)
 	}
+}
+
+func (d *Dashboard) handleLogs(w http.ResponseWriter, r *http.Request) {
+	agentAddr := r.URL.Query().Get("agent")
+	containerID := r.URL.Query().Get("container")
+	tail := r.URL.Query().Get("tail")
+	if agentAddr == "" || containerID == "" {
+		http.Error(w, "agent and container required", http.StatusBadRequest)
+		return
+	}
+	if tail == "" {
+		tail = "100"
+	}
+
+	scheme := "http"
+	var transport http.RoundTripper
+	if d.tlsConfig != nil {
+		scheme = "https"
+		transport = &http.Transport{TLSClientConfig: d.tlsConfig}
+	}
+
+	url := fmt.Sprintf("%s://%s/api/containers/%s/logs?tail=%s", scheme, agentAddr, containerID, tail)
+	req, _ := http.NewRequestWithContext(r.Context(), http.MethodGet, url, nil)
+	client := &http.Client{Timeout: 30 * time.Second, Transport: transport}
+	resp, err := client.Do(req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	io.Copy(w, resp.Body)
+}
+
+func (d *Dashboard) handleConfig(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		cfg := d.cfg.Get()
+		var providers []string
+		if d.ai != nil {
+			providers = d.ai.AvailableProviders()
+		}
+		writeJSON(w, map[string]any{
+			"ai_provider":         cfg.AIProvider,
+			"auto_update":         cfg.AutoUpdate,
+			"available_providers": providers,
+		})
+
+	case http.MethodPatch:
+		var req struct {
+			AIProvider       *string `json:"ai_provider"`
+			ToggleAutoUpdate *struct {
+				Addr string `json:"addr"`
+				Name string `json:"name"`
+			} `json:"toggle_auto_update"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		if err := d.cfg.Update(func(c *config.Config) {
+			if req.AIProvider != nil {
+				c.AIProvider = *req.AIProvider
+			}
+			if req.ToggleAutoUpdate != nil {
+				key := req.ToggleAutoUpdate.Addr + "::" + req.ToggleAutoUpdate.Name
+				c.AutoUpdate[key] = !c.AutoUpdate[key]
+			}
+		}); err != nil {
+			http.Error(w, "save failed: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		cfg := d.cfg.Get()
+		var providers []string
+		if d.ai != nil {
+			providers = d.ai.AvailableProviders()
+		}
+		writeJSON(w, map[string]any{
+			"ai_provider":         cfg.AIProvider,
+			"auto_update":         cfg.AutoUpdate,
+			"available_providers": providers,
+		})
+
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (d *Dashboard) handleAI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if d.ai == nil || !d.ai.Available() {
+		http.Error(w, "AI not configured — set ANTHROPIC_API_KEY or OPENAI_API_KEY", http.StatusServiceUnavailable)
+		return
+	}
+
+	var req struct {
+		Type          string `json:"type"` // "logs" or "health"
+		ContainerName string `json:"container_name"`
+		Image         string `json:"image"`
+		Content       string `json:"content"`    // logs text (logs type)
+		AgentAddr     string `json:"agent_addr"` // health type
+		ContainerID   string `json:"container_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+
+	var prompt string
+	switch req.Type {
+	case "logs":
+		prompt = fmt.Sprintf(
+			"You are a DevOps assistant analyzing Docker container logs.\n"+
+				"Identify errors, warnings, or issues. Be concise and actionable.\n\n"+
+				"Container: %s\nImage: %s\n\nLOGS:\n%s",
+			req.ContainerName, req.Image, req.Content)
+
+	case "health":
+		var cs *types.ContainerState
+		for _, agent := range d.state.All() {
+			if agent.Addr == req.AgentAddr {
+				for i := range agent.LastStats.Containers {
+					c := &agent.LastStats.Containers[i]
+					if c.ID == req.ContainerID || c.ShortID == req.ContainerID {
+						cs = c
+						break
+					}
+				}
+			}
+		}
+		if cs == nil {
+			http.Error(w, "container not found", http.StatusNotFound)
+			return
+		}
+		ports := strings.Join(cs.Ports, ", ")
+		if ports == "" {
+			ports = "none"
+		}
+		compose := "standalone"
+		if cs.ComposeProject != "" {
+			compose = fmt.Sprintf("project=%s service=%s", cs.ComposeProject, cs.ComposeService)
+		}
+		prompt = fmt.Sprintf(
+			"You are a DevOps and security assistant. Analyze this Docker container and provide:\n"+
+				"1. Security concerns (exposed ports, running as root, capabilities, etc.)\n"+
+				"2. Configuration recommendations\n"+
+				"3. Health or stability issues\n"+
+				"4. General observations\n\n"+
+				"Be concise and actionable.\n\n"+
+				"Container: %s\nImage: %s\nState: %s\nUpdate available: %v\n"+
+				"Ports: %s\nCompose: %s\nCPU: %.1f%%\nMemory: %s / %s",
+			cs.Name, cs.Image, cs.State, cs.UpdateAvailable,
+			ports, compose, cs.CPUPercent,
+			formatBytes(cs.MemUsage), formatBytes(cs.MemLimit))
+
+	default:
+		http.Error(w, "unknown type", http.StatusBadRequest)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
+	defer cancel()
+
+	provider := d.cfg.Get().AIProvider
+	result, err := d.ai.AskWithProvider(ctx, prompt, provider)
+	if err != nil {
+		writeJSON(w, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, map[string]string{"result": result})
 }
 
 func (d *Dashboard) handleMainFragment(w http.ResponseWriter, r *http.Request) {
 	agents := d.state.All()
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := d.tmpl.ExecuteTemplate(w, "main.html", templateData(agents)); err != nil {
+	if err := d.tmpl.ExecuteTemplate(w, "main.html", d.templateData(agents)); err != nil {
 		log.Printf("main template error: %v", err)
 	}
 }
@@ -335,7 +525,7 @@ func (d *Dashboard) handleSSE(w http.ResponseWriter, r *http.Request) {
 		case <-d.notify:
 			// Render the dashboard fragment and send it as an SSE event
 			var buf bytes.Buffer
-			if err := d.tmpl.ExecuteTemplate(&buf, "dashboard.html", templateData(d.state.All())); err != nil {
+			if err := d.tmpl.ExecuteTemplate(&buf, "dashboard.html", d.templateData(d.state.All())); err != nil {
 				log.Printf("SSE template error: %v", err)
 				continue
 			}
@@ -352,12 +542,17 @@ func (d *Dashboard) handleSSE(w http.ResponseWriter, r *http.Request) {
 
 // TemplateAgentData is passed to dashboard templates.
 type TemplateAgentData struct {
-	Agents []*AgentRecord
-	Now    time.Time
+	Agents     []*AgentRecord
+	Now        time.Time
+	AutoUpdate map[string]bool // "agentAddr::containerName" → enabled
 }
 
-func templateData(agents []*AgentRecord) TemplateAgentData {
-	return TemplateAgentData{Agents: agents, Now: time.Now()}
+func (d *Dashboard) templateData(agents []*AgentRecord) TemplateAgentData {
+	var au map[string]bool
+	if d.cfg != nil {
+		au = d.cfg.Get().AutoUpdate
+	}
+	return TemplateAgentData{Agents: agents, Now: time.Now(), AutoUpdate: au}
 }
 
 func loadTemplates(webFS fs.FS) (*template.Template, error) {
@@ -375,6 +570,15 @@ func loadTemplates(webFS fs.FS) (*template.Template, error) {
 		"clamp":             clamp,
 		"runningContainers": func(cs []types.ContainerState) []types.ContainerState { return filteredSorted(cs, true) },
 		"stoppedContainers": func(cs []types.ContainerState) []types.ContainerState { return filteredSorted(cs, false) },
+		"updatesAvailable": func(cs []types.ContainerState) int {
+			n := 0
+			for _, c := range cs {
+				if c.UpdateAvailable {
+					n++
+				}
+			}
+			return n
+		},
 		// dict builds a map[string]any from key-value pairs (for passing to sub-templates)
 		"dict": func(pairs ...any) (map[string]any, error) {
 			if len(pairs)%2 != 0 {

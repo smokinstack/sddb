@@ -45,6 +45,14 @@
           </svg>
           Add Agent
         </button>
+        <button onclick="openSettings()"
+          class="p-1.5 text-slate-400 hover:text-white border border-slate-700 hover:border-slate-500 rounded-md transition-colors" title="Settings">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+              d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+          </svg>
+        </button>
         {{if .AuthEnabled}}
         <a href="/logout"
           class="flex items-center gap-1.5 px-3 py-1.5 text-sm text-slate-400 hover:text-white border border-slate-700 hover:border-slate-500 rounded-md transition-colors">
@@ -128,6 +136,124 @@
           <div id="scan-results" class="mt-3 space-y-2 max-h-56 overflow-y-auto"></div>
         </div>
         <p id="modal-error" class="hidden text-sm text-red-400"></p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Logs Modal -->
+  <div id="logs-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+    <div class="bg-slate-900 border border-slate-700 rounded-xl w-full max-w-4xl mx-4 shadow-2xl flex flex-col" style="max-height:80vh">
+      <div class="flex items-center gap-3 px-6 py-4 border-b border-slate-800 shrink-0">
+        <!-- Title -->
+        <div class="shrink-0">
+          <h2 id="logs-title" class="font-semibold text-white">Logs</h2>
+          <p id="logs-subtitle" class="text-xs text-slate-500 mt-0.5"></p>
+        </div>
+        <!-- Search -->
+        <input id="logs-search" type="text" placeholder="Filter lines…"
+          oninput="applyLogsSearch()"
+          class="flex-1 bg-slate-800 border border-slate-700 rounded-md px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500">
+        <!-- Controls -->
+        <div class="flex items-center gap-3 shrink-0">
+          <select id="logs-tail" onchange="reloadLogs()"
+            class="bg-slate-800 border border-slate-700 text-slate-300 text-xs rounded px-2 py-1 focus:outline-none focus:border-blue-500">
+            <option value="50">50 lines</option>
+            <option value="100" selected>100 lines</option>
+            <option value="200">200 lines</option>
+            <option value="500">500 lines</option>
+            <option value="1000">1000 lines</option>
+          </select>
+          <button onclick="analyzeLogs()" class="flex items-center gap-1.5 px-2.5 py-1 text-xs text-purple-400 hover:text-purple-300 border border-purple-500/30 hover:border-purple-500/60 hover:bg-purple-500/10 rounded transition-colors" title="Analyze with AI">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/>
+            </svg>
+            Analyze
+          </button>
+          <button id="logs-copy-btn" onclick="copyLogs()" class="text-slate-400 hover:text-white transition-colors" title="Copy to clipboard">
+            <svg id="logs-copy-icon" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+            </svg>
+          </button>
+          <button onclick="reloadLogs()" class="text-slate-400 hover:text-white transition-colors" title="Refresh">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+            </svg>
+          </button>
+          <button onclick="closeModal('logs-modal')" class="text-slate-400 hover:text-white transition-colors">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+      <div id="logs-output" class="flex-1 overflow-y-auto p-4 min-h-0">
+        <pre id="logs-content" class="text-xs text-slate-300 whitespace-pre-wrap break-all"></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- AI Analysis Modal -->
+  <div id="ai-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+    <div class="bg-slate-900 border border-slate-700 rounded-xl w-full max-w-3xl mx-4 shadow-2xl flex flex-col" style="max-height:80vh">
+      <div class="flex items-center justify-between px-6 py-4 border-b border-slate-800 shrink-0">
+        <div>
+          <h2 id="ai-title" class="font-semibold text-white">AI Analysis</h2>
+          <p id="ai-subtitle" class="text-xs text-slate-500 mt-0.5"></p>
+        </div>
+        <div class="flex items-center gap-3">
+          <button id="ai-copy-btn" onclick="copyAI()" class="text-slate-400 hover:text-white transition-colors" title="Copy to clipboard">
+            <svg id="ai-copy-icon" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+            </svg>
+          </button>
+          <button onclick="closeModal('ai-modal')" class="text-slate-400 hover:text-white transition-colors">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+      <div class="flex-1 overflow-y-auto p-6 min-h-0">
+        <div id="ai-loading" class="hidden items-center gap-3 text-slate-400 mb-4">
+          <svg class="w-5 h-5 spin shrink-0" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+          </svg>
+          <span class="text-sm">Analyzing…</span>
+        </div>
+        <pre id="ai-content" class="text-sm text-slate-300 whitespace-pre-wrap leading-relaxed"></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- Settings Modal -->
+  <div id="settings-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+    <div class="bg-slate-900 border border-slate-700 rounded-xl w-full max-w-md mx-4 shadow-2xl">
+      <div class="flex items-center justify-between px-6 py-4 border-b border-slate-800">
+        <h2 class="font-semibold text-white">Settings</h2>
+        <button onclick="closeModal('settings-modal')" class="text-slate-400 hover:text-white transition-colors">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+      <div class="p-6 space-y-6">
+
+        <!-- AI Provider -->
+        <div id="settings-ai-section">
+          <label class="block text-sm font-medium text-slate-300 mb-3">AI Provider</label>
+          <div id="settings-ai-options" class="space-y-2">
+            <p class="text-xs text-slate-500">No AI providers configured.</p>
+          </div>
+        </div>
+
+      </div>
+      <div class="flex justify-end gap-3 px-6 py-4 border-t border-slate-800">
+        <button onclick="closeModal('settings-modal')" class="px-4 py-2 text-sm text-slate-400 hover:text-white transition-colors">Close</button>
       </div>
     </div>
   </div>
@@ -257,6 +383,209 @@
       refreshDashboard();
     }
 
+    // ── Config / settings ─────────────────────────────────────────────────────
+
+    let _cfg = {ai_provider: '', auto_update: {}, available_providers: []};
+
+    async function loadConfig() {
+      try {
+        const res = await fetch('/api/config');
+        if (res.ok) _cfg = await res.json();
+      } catch(e) {}
+      applyAutoUpdateState();
+    }
+
+    async function patchConfig(body) {
+      try {
+        const res = await fetch('/api/config', {
+          method: 'PATCH',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(body),
+        });
+        if (res.ok) _cfg = await res.json();
+      } catch(e) {}
+      applyAutoUpdateState();
+    }
+
+    function openSettings() {
+      const providers = _cfg.available_providers || [];
+      const current = _cfg.ai_provider || '';
+      const section = document.getElementById('settings-ai-options');
+
+      if (providers.length === 0) {
+        section.innerHTML = '<p class="text-xs text-slate-500">No AI providers configured. Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or OLLAMA_BASE_URL.</p>';
+      } else {
+        const labels = {claude: 'Claude (Anthropic)', openai: 'OpenAI', ollama: 'Ollama'};
+        const opts = [{value: '', label: 'Auto (first available)'}]
+          .concat(providers.map(p => ({value: p, label: labels[p] || p})));
+        section.innerHTML = opts.map(o => `
+          <label class="flex items-center gap-3 cursor-pointer group">
+            <input type="radio" name="ai_provider" value="${o.value}"
+              ${current === o.value ? 'checked' : ''}
+              onchange="patchConfig({ai_provider: this.value})"
+              class="accent-blue-500">
+            <span class="text-sm text-slate-300 group-hover:text-white transition-colors">${o.label}</span>
+          </label>`).join('');
+      }
+      document.getElementById('settings-modal').classList.remove('hidden');
+    }
+
+    // ── Auto-update toggles ───────────────────────────────────────────────────
+
+    function applyAutoUpdateState() {
+      document.querySelectorAll('[data-au-key]').forEach(btn => {
+        const enabled = !!_cfg.auto_update?.[btn.dataset.auKey];
+        btn.dataset.enabled = enabled;
+        if (enabled) {
+          btn.className = btn.className.replace(/au-off/g, '').trim() + ' au-on';
+          btn.classList.remove('text-slate-600', 'border-slate-700');
+          btn.classList.add('text-green-400', 'border-green-500/40', 'bg-green-500/10');
+          btn.title = 'Auto-update: on';
+        } else {
+          btn.classList.remove('text-green-400', 'border-green-500/40', 'bg-green-500/10');
+          btn.classList.add('text-slate-600', 'border-slate-700');
+          btn.title = 'Auto-update: off';
+        }
+      });
+    }
+
+    function toggleAutoUpdate(agentAddr, containerName) {
+      patchConfig({toggle_auto_update: {addr: agentAddr, name: containerName}});
+    }
+
+    // ── Logs modal ────────────────────────────────────────────────────────────
+
+    let _logsAgent = '', _logsContainer = '', _logsRaw = '', _logsImage = '';
+
+    async function viewLogs(agentAddr, containerId, containerName, image) {
+      _logsAgent = agentAddr;
+      _logsContainer = containerId;
+      _logsImage = image || '';
+      document.getElementById('logs-title').textContent = containerName;
+      document.getElementById('logs-subtitle').textContent = agentAddr;
+      document.getElementById('logs-search').value = '';
+      document.getElementById('logs-modal').classList.remove('hidden');
+      await reloadLogs();
+    }
+
+    async function reloadLogs() {
+      const tail = document.getElementById('logs-tail').value;
+      const content = document.getElementById('logs-content');
+      content.textContent = 'Loading…';
+      try {
+        const res = await fetch(`/api/logs?agent=${encodeURIComponent(_logsAgent)}&container=${encodeURIComponent(_logsContainer)}&tail=${tail}`);
+        _logsRaw = await res.text() || '(no output)';
+        applyLogsSearch();
+      } catch(e) {
+        _logsRaw = '';
+        content.textContent = 'Error: ' + e.message;
+      }
+    }
+
+    function applyLogsSearch() {
+      const query = document.getElementById('logs-search').value.toLowerCase();
+      const content = document.getElementById('logs-content');
+      if (!query) {
+        content.textContent = _logsRaw;
+      } else {
+        const matched = _logsRaw.split('\n').filter(l => l.toLowerCase().includes(query));
+        content.textContent = matched.length ? matched.join('\n') : '(no matching lines)';
+      }
+      const out = document.getElementById('logs-output');
+      out.scrollTop = out.scrollHeight;
+    }
+
+    async function copyLogs() {
+      if (!_logsRaw) return;
+      try {
+        await navigator.clipboard.writeText(_logsRaw);
+      } catch(e) {
+        // Fallback for plain HTTP contexts where clipboard API is blocked
+        const ta = document.createElement('textarea');
+        ta.value = _logsRaw;
+        ta.style.cssText = 'position:fixed;opacity:0;pointer-events:none';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      }
+      const icon = document.getElementById('logs-copy-icon');
+      icon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>';
+      setTimeout(() => {
+        icon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/>';
+      }, 2000);
+    }
+
+    // ── AI analysis ──────────────────────────────────────────────────────────
+
+    let _aiRaw = '';
+
+    async function _callAI(title, subtitle, body) {
+      document.getElementById('ai-title').textContent = title;
+      document.getElementById('ai-subtitle').textContent = subtitle;
+      document.getElementById('ai-content').textContent = '';
+      document.getElementById('ai-loading').classList.remove('hidden');
+      document.getElementById('ai-loading').classList.add('flex');
+      document.getElementById('ai-modal').classList.remove('hidden');
+      _aiRaw = '';
+      try {
+        const res = await fetch('/api/ai', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(body),
+        });
+        const data = await res.json();
+        if (!res.ok || data.error) throw new Error(data.error || res.statusText);
+        _aiRaw = data.result;
+        document.getElementById('ai-content').textContent = _aiRaw;
+      } catch(e) {
+        document.getElementById('ai-content').textContent = 'Error: ' + e.message;
+      } finally {
+        document.getElementById('ai-loading').classList.add('hidden');
+        document.getElementById('ai-loading').classList.remove('flex');
+      }
+    }
+
+    function analyzeLogs() {
+      const name = document.getElementById('logs-title').textContent;
+      _callAI('Log Analysis — ' + name, _logsImage, {
+        type: 'logs',
+        container_name: name,
+        image: _logsImage,
+        content: _logsRaw,
+      });
+    }
+
+    function healthCheck(agentAddr, containerId, containerName, image) {
+      _callAI('Health Check — ' + containerName, image, {
+        type: 'health',
+        agent_addr: agentAddr,
+        container_id: containerId,
+        container_name: containerName,
+        image: image,
+      });
+    }
+
+    async function copyAI() {
+      if (!_aiRaw) return;
+      try {
+        await navigator.clipboard.writeText(_aiRaw);
+      } catch(e) {
+        const ta = document.createElement('textarea');
+        ta.value = _aiRaw;
+        ta.style.cssText = 'position:fixed;opacity:0;pointer-events:none';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      }
+      const icon = document.getElementById('ai-copy-icon');
+      icon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>';
+      setTimeout(() => {
+        icon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/>';
+      }, 2000);
+    }
+
     // ── Panel collapse ────────────────────────────────────────────────────────
 
     const COLLAPSED_KEY = 'sddb-collapsed';
@@ -381,8 +710,10 @@
       applyCollapsed();
       applyCollapsedCards();
       applyHostFilter();
+      applyAutoUpdateState();
     });
     document.addEventListener('DOMContentLoaded', () => {
+      loadConfig();
       applyCollapsed();
       applyCollapsedCards();
       applyHostFilter();

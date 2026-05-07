@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sync"
 	"time"
 
+	"github.com/jester/sddb/internal/config"
 	"github.com/jester/sddb/internal/types"
 )
 
@@ -18,10 +20,21 @@ type Poller struct {
 	interval  time.Duration
 	notify    chan struct{} // written to on every successful poll
 	tlsConfig *tls.Config  // nil → plain HTTP
+	cfg       *config.Store
+
+	upgradeMu      sync.Mutex
+	lastAutoUpgrade map[string]time.Time // "addr::name" → last upgrade time
 }
 
-func NewPoller(state *State, interval time.Duration, notify chan struct{}, tlsConfig *tls.Config) *Poller {
-	return &Poller{state: state, interval: interval, notify: notify, tlsConfig: tlsConfig}
+func NewPoller(state *State, interval time.Duration, notify chan struct{}, tlsConfig *tls.Config, cfg *config.Store) *Poller {
+	return &Poller{
+		state:           state,
+		interval:        interval,
+		notify:          notify,
+		tlsConfig:       tlsConfig,
+		cfg:             cfg,
+		lastAutoUpgrade: make(map[string]time.Time),
+	}
 }
 
 // Run starts polling all known agents in the background.
@@ -57,6 +70,71 @@ func (p *Poller) pollOne(ctx context.Context, addr string) {
 	case p.notify <- struct{}{}:
 	default:
 	}
+	go p.runAutoUpdates(addr, resp.Containers)
+}
+
+// runAutoUpdates upgrades any container that has auto-update enabled and an update available.
+func (p *Poller) runAutoUpdates(addr string, containers []types.ContainerState) {
+	const cooldown = 10 * time.Minute
+	for _, c := range containers {
+		if !c.UpdateAvailable || c.State != "running" {
+			continue
+		}
+		if !p.cfg.IsAutoUpdate(addr, c.Name) {
+			continue
+		}
+		key := addr + "::" + c.Name
+
+		// Atomic check-and-claim: hold the lock through both the check and
+		// the timestamp update so concurrent goroutines can't both pass.
+		p.upgradeMu.Lock()
+		last := p.lastAutoUpgrade[key]
+		if time.Since(last) < cooldown {
+			p.upgradeMu.Unlock()
+			continue
+		}
+		p.lastAutoUpgrade[key] = time.Now() // claim the slot before releasing
+		p.upgradeMu.Unlock()
+
+		log.Printf("auto-update: upgrading %s on %s", c.Name, addr)
+		if err := p.sendUpgrade(addr, c.ID); err != nil {
+			log.Printf("auto-update: upgrade %s on %s failed: %v", c.Name, addr, err)
+			// Release the slot so it retries after cooldown from the original time
+			p.upgradeMu.Lock()
+			p.lastAutoUpgrade[key] = last
+			p.upgradeMu.Unlock()
+			continue
+		}
+		// Re-poll after a short delay so the dashboard reflects the change
+		go func(a string) {
+			time.Sleep(3 * time.Second)
+			p.PollNow(context.Background(), a)
+		}(addr)
+	}
+}
+
+func (p *Poller) sendUpgrade(addr, containerID string) error {
+	scheme := "http"
+	var transport http.RoundTripper
+	if p.tlsConfig != nil {
+		scheme = "https"
+		transport = &http.Transport{TLSClientConfig: p.tlsConfig}
+	}
+	url := fmt.Sprintf("%s://%s/api/containers/%s/upgrade", scheme, addr, containerID)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, url, nil)
+	if err != nil {
+		return err
+	}
+	client := &http.Client{Timeout: 5 * time.Minute, Transport: transport}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("agent returned %d", resp.StatusCode)
+	}
+	return nil
 }
 
 // PollNow immediately polls a single agent address.

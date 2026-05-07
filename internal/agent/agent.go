@@ -157,7 +157,12 @@ func (a *Agent) checkUpdate(ctx context.Context, imageName, imageID string) bool
 		return false
 	}
 
-	available, _ := CheckUpdateAvailable(ctx, imageName, imgInfo.RepoDigests)
+	available, err := CheckUpdateAvailable(ctx, imageName, imgInfo.RepoDigests)
+	if err != nil {
+		log.Printf("update check %s: %v", imageName, err)
+	} else {
+		log.Printf("update check %s: available=%v repoDigests=%v", imageName, available, imgInfo.RepoDigests)
+	}
 
 	a.updateCacheMu.Lock()
 	a.updateCache[imageID] = updateEntry{available: available, checkedAt: time.Now()}
@@ -182,8 +187,37 @@ func (a *Agent) handleContainers(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, resp)
 }
 
+// handleLogs serves GET /api/containers/{id}/logs?tail=N
+func (a *Agent) handleLogs(w http.ResponseWriter, r *http.Request) {
+	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/containers/"), "/")
+	if len(parts) != 2 {
+		http.Error(w, "bad path", http.StatusBadRequest)
+		return
+	}
+	containerID := parts[0]
+	tail := r.URL.Query().Get("tail")
+	if tail == "" {
+		tail = "100"
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	logs, err := a.docker.GetLogs(ctx, containerID, tail)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Write([]byte(logs))
+}
+
 // handleCommand processes POST /api/containers/{id}/{action}.
 func (a *Agent) handleCommand(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		a.handleLogs(w, r)
+		return
+	}
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -197,7 +231,11 @@ func (a *Agent) handleCommand(w http.ResponseWriter, r *http.Request) {
 	}
 	containerID, action := parts[0], parts[1]
 
-	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	timeout := 60 * time.Second
+	if action == "upgrade" {
+		timeout = 10 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
 
 	var err error

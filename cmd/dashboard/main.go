@@ -14,7 +14,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jester/sddb/internal/ai"
 	"github.com/jester/sddb/internal/auth"
+	"github.com/jester/sddb/internal/config"
 	"github.com/jester/sddb/internal/dashboard"
 	"github.com/jester/sddb/internal/pki"
 	"golang.org/x/term"
@@ -195,10 +197,21 @@ func runDashboard() {
 		log.Println("mTLS enabled — agents must present a certificate signed by the dashboard CA")
 	}
 
+	aiClient := ai.New(
+		os.Getenv("ANTHROPIC_API_KEY"),
+		os.Getenv("OPENAI_API_KEY"),
+		os.Getenv("OLLAMA_BASE_URL"),
+		os.Getenv("OLLAMA_MODEL"),
+	)
+	if aiClient.Available() {
+		log.Printf("AI assistant enabled — %s", aiClient.Provider())
+	}
+
 	dashCfg := dashboard.Config{
 		AgentPort: *agentPort,
 		Creds:     creds,
 		Sessions:  sessions,
+		AI:        aiClient,
 	}
 
 	if clientTLS != nil {
@@ -213,11 +226,18 @@ func runDashboard() {
 		dashCfg.TLS = tlsCfg
 	}
 
-	// ── State + Poller + Dashboard ────────────────────────────────────────────
+	// ── Config + State + Poller + Dashboard ──────────────────────────────────
+	cfg, err := config.Load(*dataDir)
+	if err != nil {
+		log.Fatalf("load config: %v", err)
+	}
+
 	persistPath := filepath.Join(*dataDir, "agents.json")
 	state := dashboard.NewState(persistPath)
 	notify := make(chan struct{}, 16)
-	poller := dashboard.NewPoller(state, *pollInterval, notify, dashCfg.TLS)
+	poller := dashboard.NewPoller(state, *pollInterval, notify, dashCfg.TLS, cfg)
+
+	dashCfg.Cfg = cfg
 
 	webFS, err := fs.Sub(webFiles, "web")
 	if err != nil {
