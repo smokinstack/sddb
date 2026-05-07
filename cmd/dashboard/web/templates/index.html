@@ -4,6 +4,9 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>SDDB — Container Dashboard</title>
+  <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32.png">
+  <link rel="apple-touch-icon" sizes="192x192" href="/static/favicon-192.png">
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://unpkg.com/htmx.org@1.9.12"></script>
   <style>
@@ -26,10 +29,7 @@
   <header class="border-b border-slate-800 bg-slate-900/80 backdrop-blur z-30 shrink-0">
     <div class="px-6 h-14 flex items-center justify-between">
       <div class="flex items-center gap-3">
-        <svg class="w-6 h-6 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-            d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2"/>
-        </svg>
+        <img src="/static/favicon-192.png" class="w-8 h-8 rounded" alt="SDDB">
         <span class="font-semibold text-white tracking-tight">SDDB</span>
         <span class="text-slate-500 text-sm">Container Dashboard</span>
       </div>
@@ -330,13 +330,24 @@
           found.forEach(r => {
             const el = document.createElement('div');
             el.className = 'flex items-center justify-between bg-slate-800 rounded-md px-3 py-2';
-            el.innerHTML = `
-              <div>
-                <span class="text-sm text-white mono">${r.addr}</span>
-                <span class="ml-2 text-xs text-slate-400">${r.info.hostname || ''}</span>
-              </div>
-              <button onclick="addScannedAgent('${r.addr}')"
-                class="px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white text-xs rounded transition-colors">Add</button>`;
+
+            const left = document.createElement('div');
+            const addrSpan = document.createElement('span');
+            addrSpan.className = 'text-sm text-white mono';
+            addrSpan.textContent = r.addr;
+            const hostSpan = document.createElement('span');
+            hostSpan.className = 'ml-2 text-xs text-slate-400';
+            hostSpan.textContent = r.info.hostname || '';
+            left.appendChild(addrSpan);
+            left.appendChild(hostSpan);
+
+            const btn = document.createElement('button');
+            btn.className = 'px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white text-xs rounded transition-colors';
+            btn.textContent = 'Add';
+            btn.addEventListener('click', () => addScannedAgent(r.addr));
+
+            el.appendChild(left);
+            el.appendChild(btn);
             results.appendChild(el);
           });
         }

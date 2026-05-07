@@ -28,7 +28,7 @@ func New(anthropicKey, openaiKey, ollamaURL, ollamaModel string) *Client {
 		openaiKey:    openaiKey,
 		ollamaURL:    ollamaURL,
 		ollamaModel:  ollamaModel,
-		http:         &http.Client{Timeout: 90 * time.Second},
+		http:         &http.Client{Timeout: 5 * time.Minute},
 	}
 }
 

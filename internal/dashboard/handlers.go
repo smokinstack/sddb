@@ -71,6 +71,13 @@ func (d *Dashboard) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/login", d.handleLogin)
 	mux.HandleFunc("/logout", d.handleLogout)
+
+	// Static assets — served without auth so browsers can fetch favicon etc.
+	staticFS, err := fs.Sub(d.webFS, "static")
+	if err == nil {
+		mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticFS))))
+	}
+
 	mux.HandleFunc("/", d.handleIndex)
 	mux.HandleFunc("/api/agents", d.handleAgents)
 	mux.HandleFunc("/api/agents/", d.handleAgentAction)
@@ -291,10 +298,13 @@ func (d *Dashboard) handleAI(w http.ResponseWriter, r *http.Request) {
 	switch req.Type {
 	case "logs":
 		prompt = fmt.Sprintf(
-			"You are a DevOps assistant analyzing Docker container logs.\n"+
-				"Identify errors, warnings, or issues. Be concise and actionable.\n\n"+
-				"Container: %s\nImage: %s\n\nLOGS:\n%s",
-			req.ContainerName, req.Image, req.Content)
+			"Analyze these Docker container logs and report:\n"+
+				"1. Any errors or exceptions\n"+
+				"2. Any warnings\n"+
+				"3. Anything unusual or worth investigating\n"+
+				"Be direct and concise. Do not ask for more information.\n\n"+
+				"Container: %s\nImage: %s\n\nLOGS (last 150 lines):\n%s",
+			req.ContainerName, req.Image, tailLines(req.Content, 150))
 
 	case "health":
 		var cs *types.ContainerState
@@ -339,7 +349,7 @@ func (d *Dashboard) handleAI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
 	defer cancel()
 
 	provider := d.cfg.Get().AIProvider
@@ -456,6 +466,10 @@ func (d *Dashboard) handleScan(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+var allowedActions = map[string]bool{
+	"start": true, "stop": true, "restart": true, "upgrade": true, "pull": true,
+}
+
 // handleCommand forwards a command to the appropriate agent.
 // POST /api/command  body: {agent_addr, container_id, action}
 func (d *Dashboard) handleCommand(w http.ResponseWriter, r *http.Request) {
@@ -471,6 +485,18 @@ func (d *Dashboard) handleCommand(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+
+	// Validate action against allowlist.
+	if !allowedActions[req.Action] {
+		http.Error(w, "unknown action", http.StatusBadRequest)
+		return
+	}
+
+	// Validate agent_addr is a registered agent to prevent SSRF.
+	if _, ok := d.state.findByAddr(req.AgentAddr); !ok {
+		http.Error(w, "unknown agent", http.StatusBadRequest)
 		return
 	}
 
@@ -715,4 +741,12 @@ func since(t time.Time) string {
 	default:
 		return fmt.Sprintf("%dh ago", int(d.Hours()))
 	}
+}
+
+func tailLines(s string, n int) string {
+	lines := strings.Split(s, "\n")
+	if len(lines) <= n {
+		return s
+	}
+	return strings.Join(lines[len(lines)-n:], "\n")
 }
