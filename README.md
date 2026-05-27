@@ -283,6 +283,24 @@ Each container card has an **Auto** button. When enabled, the dashboard will aut
 - The 10-minute cooldown is in-memory — restarting the dashboard clears all cooldown timers.
 - Registries that require authentication (private registries) are not supported for update checks. The container will never show **update available** and auto-update will not fire.
 
+### Docker Hub rate limiting
+
+Docker Hub limits unauthenticated image pulls to **100 pulls per 6 hours** per IP address. If auto-update hits this limit you will see an error like:
+
+```
+toomanyrequests: You have reached your unauthenticated pull rate limit
+```
+
+When this happens the dashboard automatically backs off for **1 hour** before retrying, rather than hammering the registry every 10 minutes.
+
+The permanent fix is to authenticate Docker on each agent host:
+
+```bash
+docker login
+```
+
+Authenticated free accounts get 200 pulls per 6 hours. Docker Pro/Team accounts have no pull limit. Once logged in, compose pulls and standalone pulls will use your credentials automatically.
+
 ---
 
 ## Dashboard reference

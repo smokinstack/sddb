@@ -5,8 +5,10 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,17 +24,33 @@ type Poller struct {
 	tlsConfig *tls.Config  // nil → plain HTTP
 	cfg       *config.Store
 
-	upgradeMu      sync.Mutex
+	// Shared HTTP clients — reused across all requests so connections are
+	// pooled and ephemeral ports are not exhausted.
+	pollClient    *http.Client
+	upgradeClient *http.Client
+
+	upgradeMu       sync.Mutex
 	lastAutoUpgrade map[string]time.Time // "addr::name" → last upgrade time
 }
 
 func NewPoller(state *State, interval time.Duration, notify chan struct{}, tlsConfig *tls.Config, cfg *config.Store) *Poller {
+	var transport http.RoundTripper
+	if tlsConfig != nil {
+		transport = &http.Transport{
+			TLSClientConfig: tlsConfig,
+			// Allow enough idle connections for all agents.
+			MaxIdleConns:        32,
+			MaxIdleConnsPerHost: 4,
+		}
+	}
 	return &Poller{
 		state:           state,
 		interval:        interval,
 		notify:          notify,
 		tlsConfig:       tlsConfig,
 		cfg:             cfg,
+		pollClient:      &http.Client{Timeout: 10 * time.Second, Transport: transport},
+		upgradeClient:   &http.Client{Timeout: 5 * time.Minute, Transport: transport},
 		lastAutoUpgrade: make(map[string]time.Time),
 	}
 }
@@ -98,11 +116,20 @@ func (p *Poller) runAutoUpdates(addr string, containers []types.ContainerState) 
 
 		log.Printf("auto-update: upgrading %s on %s", c.Name, addr)
 		if err := p.sendUpgrade(addr, c.ID); err != nil {
-			log.Printf("auto-update: upgrade %s on %s failed: %v", c.Name, addr, err)
-			// Release the slot so it retries after cooldown from the original time
-			p.upgradeMu.Lock()
-			p.lastAutoUpgrade[key] = last
-			p.upgradeMu.Unlock()
+			errStr := err.Error()
+			if strings.Contains(errStr, "toomanyrequests") || strings.Contains(errStr, "rate limit") {
+				// Back off for 1 hour so we stop hammering the registry
+				log.Printf("auto-update: rate limited upgrading %s on %s — backing off 1h", c.Name, addr)
+				p.upgradeMu.Lock()
+				p.lastAutoUpgrade[key] = time.Now().Add(-cooldown + time.Hour)
+				p.upgradeMu.Unlock()
+			} else {
+				log.Printf("auto-update: upgrade %s on %s failed: %v", c.Name, addr, err)
+				// Release the slot so it retries after the normal cooldown
+				p.upgradeMu.Lock()
+				p.lastAutoUpgrade[key] = last
+				p.upgradeMu.Unlock()
+			}
 			continue
 		}
 		// Re-poll after a short delay so the dashboard reflects the change
@@ -115,24 +142,22 @@ func (p *Poller) runAutoUpdates(addr string, containers []types.ContainerState) 
 
 func (p *Poller) sendUpgrade(addr, containerID string) error {
 	scheme := "http"
-	var transport http.RoundTripper
 	if p.tlsConfig != nil {
 		scheme = "https"
-		transport = &http.Transport{TLSClientConfig: p.tlsConfig}
 	}
 	url := fmt.Sprintf("%s://%s/api/containers/%s/upgrade", scheme, addr, containerID)
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, url, nil)
 	if err != nil {
 		return err
 	}
-	client := &http.Client{Timeout: 5 * time.Minute, Transport: transport}
-	resp, err := client.Do(req)
+	resp, err := p.upgradeClient.Do(req)
 	if err != nil {
 		return err
 	}
+	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("agent returned %d", resp.StatusCode)
+		return fmt.Errorf("agent returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 	return nil
 }
@@ -150,10 +175,8 @@ func (p *Poller) PollNow(ctx context.Context, addr string) error {
 
 func (p *Poller) fetchStats(ctx context.Context, addr string) (types.StatsResponse, error) {
 	scheme := "http"
-	var transport http.RoundTripper
 	if p.tlsConfig != nil {
 		scheme = "https"
-		transport = &http.Transport{TLSClientConfig: p.tlsConfig}
 	}
 
 	url := fmt.Sprintf("%s://%s/api/containers", scheme, addr)
@@ -162,8 +185,7 @@ func (p *Poller) fetchStats(ctx context.Context, addr string) (types.StatsRespon
 		return types.StatsResponse{}, err
 	}
 
-	client := &http.Client{Timeout: 10 * time.Second, Transport: transport}
-	resp, err := client.Do(req)
+	resp, err := p.pollClient.Do(req)
 	if err != nil {
 		return types.StatsResponse{}, err
 	}
