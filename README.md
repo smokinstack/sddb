@@ -26,7 +26,8 @@ Communication between the dashboard and agents is secured with mutual TLS (mTLS)
 - **Auto-update** — per-container toggle; the dashboard upgrades automatically when a new image is available, with a 10-minute cooldown between attempts
 - **Log viewer** — view the last N lines of any container's logs, with search/filter, clipboard copy, and live auto-refresh
 - **AI analysis** — send logs or a health prompt to Claude, ChatGPT, or a local Ollama model for instant analysis
-- **Settings** — choose AI provider; toggle visibility of stopped containers
+- **Notifications** — ntfy push alerts on crash, OOM kill, or restart loop, with automatic crash-loop suppression and recovery notification
+- **Settings** — choose AI provider; configure ntfy URL; toggle visibility of stopped containers
 - **Admin authentication** — optional login; unprotected by default until you run `set-admin`
 - **mTLS security** — all agent communication is certificate-authenticated
 - **Systemd service files** — included for both components
@@ -248,6 +249,7 @@ The Settings panel also contains:
 | Setting | Default | Description |
 |---|---|---|
 | Show stopped containers | On | Hide/show stopped containers across all hosts. Saved in browser `localStorage`. |
+| ntfy URL | — | Full topic URL for push notifications. Saved to `config.json`. Leave blank to disable. |
 
 ### Claude (Anthropic)
 
@@ -348,6 +350,46 @@ If a container has crashed, been OOM-killed, or exited non-zero within the last 
 - **· Xm ago** — time since the last exit
 
 The history line is hidden when the last exit was more than 48 hours ago to avoid noise from containers with large historical restart counts.
+
+---
+
+## Notifications (ntfy)
+
+SDDB can push alerts to any [ntfy](https://ntfy.sh) topic when a container crashes, is OOM-killed, or enters a restart loop.
+
+### Setup
+
+1. Choose a topic URL — either on the public ntfy.sh server or your own self-hosted instance:
+   - Public: `https://ntfy.sh/my-homelab-alerts` (use a hard-to-guess name)
+   - Self-hosted: `https://ntfy.example.com/my-topic`
+2. Subscribe to the topic in the ntfy app on your phone or browser.
+3. Open **Settings** in the dashboard, paste the URL into the **ntfy URL** field, and click **Save**.
+4. Click **Test** to send a test notification and confirm it arrives before relying on it.
+
+The URL is saved to `/var/lib/sddb/config.json` and takes effect immediately — no restart needed. Leave the field blank to disable notifications.
+
+### What triggers an alert
+
+| Event | Priority | Condition |
+|---|---|---|
+| Container restarted | default | Docker restart policy fired (RestartCount increased) |
+| Container OOM-killed and restarted | high | As above, OOMKilled flag set |
+| Container crashed and stopped | default | `running` → `exited` with non-zero exit code |
+| Container OOM-killed and stopped | high | As above, OOMKilled flag set |
+| **Crash loop detected** | urgent | 3 or more crash events within 15 minutes |
+| **Container recovered** | low | Stable for 10 minutes after crash-loop suppression |
+| Clean stop (exit 0) | — | No alert — assumed intentional |
+
+### Crash-loop suppression
+
+If a container crashes repeatedly, SDDB escalates and then goes quiet to avoid flooding your phone:
+
+1. First crash → normal alert
+2. Second crash → normal alert (after 5-minute cooldown)
+3. Third crash within 15 minutes → **"Crash loop" urgent alert**, then all further alerts for that container are suppressed
+4. Once the container has been running without a new restart for 10 minutes → single **"Recovered"** alert, normal alerting resumes
+
+The 15-minute crash window is a rolling timestamp check, not a poll-cycle count, so fast restart loops are caught quickly regardless of poll interval.
 
 ---
 

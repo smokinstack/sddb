@@ -89,6 +89,7 @@ func (d *Dashboard) Handler() http.Handler {
 	mux.HandleFunc("/api/logs", d.handleLogs)
 	mux.HandleFunc("/api/ai", d.handleAI)
 	mux.HandleFunc("/api/config", d.handleConfig)
+	mux.HandleFunc("/api/ntfy/test", d.handleNtfyTest)
 	mux.HandleFunc("/events", d.handleSSE)
 
 	if d.creds != nil {
@@ -217,6 +218,41 @@ func (d *Dashboard) handleLogs(w http.ResponseWriter, r *http.Request) {
 	io.Copy(w, resp.Body)
 }
 
+func (d *Dashboard) handleNtfyTest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		URL string `json:"url"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.URL == "" {
+		http.Error(w, "url required", http.StatusBadRequest)
+		return
+	}
+	httpReq, err := http.NewRequestWithContext(r.Context(), http.MethodPost, req.URL,
+		strings.NewReader("SDDB test notification — alerts are working."))
+	if err != nil {
+		writeJSON(w, map[string]string{"error": err.Error()})
+		return
+	}
+	httpReq.Header.Set("Title", "SDDB test")
+	httpReq.Header.Set("Content-Type", "text/plain")
+	httpReq.Header.Set("Priority", "low")
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		writeJSON(w, map[string]string{"error": err.Error()})
+		return
+	}
+	resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		writeJSON(w, map[string]string{"error": fmt.Sprintf("ntfy returned %d", resp.StatusCode)})
+		return
+	}
+	writeJSON(w, map[string]bool{"ok": true})
+}
+
 func (d *Dashboard) handleConfig(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -229,11 +265,13 @@ func (d *Dashboard) handleConfig(w http.ResponseWriter, r *http.Request) {
 			"ai_provider":         cfg.AIProvider,
 			"auto_update":         cfg.AutoUpdate,
 			"available_providers": providers,
+			"ntfy_url":            cfg.NtfyURL,
 		})
 
 	case http.MethodPatch:
 		var req struct {
 			AIProvider       *string `json:"ai_provider"`
+			NtfyURL          *string `json:"ntfy_url"`
 			ToggleAutoUpdate *struct {
 				Addr string `json:"addr"`
 				Name string `json:"name"`
@@ -246,6 +284,9 @@ func (d *Dashboard) handleConfig(w http.ResponseWriter, r *http.Request) {
 		if err := d.cfg.Update(func(c *config.Config) {
 			if req.AIProvider != nil {
 				c.AIProvider = *req.AIProvider
+			}
+			if req.NtfyURL != nil {
+				c.NtfyURL = *req.NtfyURL
 			}
 			if req.ToggleAutoUpdate != nil {
 				key := req.ToggleAutoUpdate.Addr + "::" + req.ToggleAutoUpdate.Name
@@ -264,6 +305,7 @@ func (d *Dashboard) handleConfig(w http.ResponseWriter, r *http.Request) {
 			"ai_provider":         cfg.AIProvider,
 			"auto_update":         cfg.AutoUpdate,
 			"available_providers": providers,
+			"ntfy_url":            cfg.NtfyURL,
 		})
 
 	default:

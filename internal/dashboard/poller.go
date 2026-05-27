@@ -31,6 +31,8 @@ type Poller struct {
 
 	upgradeMu       sync.Mutex
 	lastAutoUpgrade map[string]time.Time // "addr::name" → last upgrade time
+
+	notifier *Notifier
 }
 
 func NewPoller(state *State, interval time.Duration, notify chan struct{}, tlsConfig *tls.Config, cfg *config.Store) *Poller {
@@ -52,6 +54,7 @@ func NewPoller(state *State, interval time.Duration, notify chan struct{}, tlsCo
 		pollClient:      &http.Client{Timeout: 10 * time.Second, Transport: transport},
 		upgradeClient:   &http.Client{Timeout: 5 * time.Minute, Transport: transport},
 		lastAutoUpgrade: make(map[string]time.Time),
+		notifier:        newNotifier(cfg),
 	}
 }
 
@@ -84,6 +87,7 @@ func (p *Poller) pollOne(ctx context.Context, addr string) {
 		return
 	}
 	p.state.UpdateFromPoll(addr, resp)
+	p.notifier.Check(addr, resp.Containers)
 	select {
 	case p.notify <- struct{}{}:
 	default:

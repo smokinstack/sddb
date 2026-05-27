@@ -266,6 +266,34 @@
 
         <div class="border-t border-slate-800"></div>
 
+        <!-- Notifications -->
+        <div>
+          <label class="block text-sm font-medium text-slate-300 mb-3">Notifications</label>
+          <div>
+            <label class="block text-xs text-slate-400 mb-1.5">
+              ntfy URL
+              <span class="text-slate-600 ml-1">e.g. https://ntfy.sh/my-alerts</span>
+            </label>
+            <div class="flex gap-2">
+              <input id="settings-ntfy-url" type="text" placeholder="https://ntfy.sh/my-alerts"
+                class="flex-1 bg-slate-800 border border-slate-700 rounded-md px-3 py-2 text-sm text-white
+                       placeholder-slate-500 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500/50
+                       transition-colors">
+              <button id="ntfy-test-btn" onclick="testNtfy()"
+                class="px-3 py-2 text-sm text-slate-300 hover:text-white border border-slate-700 hover:border-slate-500 rounded-md transition-colors whitespace-nowrap">
+                Test
+              </button>
+              <button onclick="saveNtfyUrl()"
+                class="px-3 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm rounded-md transition-colors whitespace-nowrap">
+                Save
+              </button>
+            </div>
+            <p class="text-xs text-slate-600 mt-1.5">Alerts on crash, OOM kill, or unexpected restart. Leave blank to disable.</p>
+          </div>
+        </div>
+
+        <div class="border-t border-slate-800"></div>
+
         <!-- AI Provider -->
         <div id="settings-ai-section">
           <label class="block text-sm font-medium text-slate-300 mb-3">AI Provider</label>
@@ -464,7 +492,39 @@
             <span class="text-sm text-slate-300 group-hover:text-white transition-colors">${o.label}</span>
           </label>`).join('');
       }
+      const ntfyInput = document.getElementById('settings-ntfy-url');
+      if (ntfyInput) ntfyInput.value = _cfg.ntfy_url || '';
+
       document.getElementById('settings-modal').classList.remove('hidden');
+    }
+
+    async function saveNtfyUrl() {
+      const url = document.getElementById('settings-ntfy-url').value.trim();
+      await patchConfig({ntfy_url: url});
+      showToast(url ? 'ntfy notifications enabled' : 'ntfy notifications disabled', true);
+    }
+
+    async function testNtfy() {
+      const url = document.getElementById('settings-ntfy-url').value.trim();
+      if (!url) { showToast('Enter an ntfy URL first', false); return; }
+      const btn = document.getElementById('ntfy-test-btn');
+      btn.textContent = 'Sending…';
+      btn.disabled = true;
+      try {
+        const res = await fetch('/api/ntfy/test', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({url}),
+        });
+        const data = await res.json();
+        if (res.ok) showToast('Test notification sent', true);
+        else showToast('Failed: ' + (data.error || res.statusText), false);
+      } catch(e) {
+        showToast('Failed: ' + e.message, false);
+      } finally {
+        btn.textContent = 'Test';
+        btn.disabled = false;
+      }
     }
 
     // ── Auto-update toggles ───────────────────────────────────────────────────
