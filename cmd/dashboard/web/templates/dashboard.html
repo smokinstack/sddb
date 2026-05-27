@@ -162,6 +162,19 @@
   <!-- Panel body (collapsible) -->
   <div class="panel-body">
     {{if .Online}}
+      {{/* Host summary strip */}}
+      {{$h := .LastStats.Host}}
+      {{if $h.MemTotal}}
+      <div class="px-5 py-2 border-b border-slate-800/50 flex flex-wrap gap-x-5 gap-y-1 text-xs text-slate-400">
+        <span><span class="text-slate-500">CPU</span> <span class="mono {{cpuTextColor $h.CPUPercent}}">{{formatPercent $h.CPUPercent}}</span></span>
+        <span><span class="text-slate-500">RAM</span> <span class="mono">{{formatBytes $h.MemUsage}} / {{formatBytes $h.MemTotal}}</span></span>
+        {{if $h.DiskTotal}}
+        {{$dp := diskPercent $h.DiskUsage $h.DiskTotal}}
+        <span><span class="text-slate-500">Disk</span> <span class="mono {{diskTextColor $dp}}">{{formatPercent $dp}}</span></span>
+        {{end}}
+        <span><span class="text-slate-500">Net</span> <span class="mono">↓{{formatRate $h.NetRxRate}} ↑{{formatRate $h.NetTxRate}}</span></span>
+      </div>
+      {{end}}
       {{if and (not $running) (not $stopped)}}
         <div class="px-5 py-8 text-sm text-slate-500 text-center">No containers found on this host.</div>
       {{else}}

@@ -51,9 +51,21 @@ func (c *ContainerState) IsCompose() bool {
 	return c.ComposeProject != ""
 }
 
+// HostStats holds host-level resource usage reported by the agent.
+type HostStats struct {
+	CPUPercent float64 `json:"cpu_percent"`
+	MemUsage   uint64  `json:"mem_usage"`
+	MemTotal   uint64  `json:"mem_total"`
+	DiskUsage  uint64  `json:"disk_usage"`
+	DiskTotal  uint64  `json:"disk_total"`
+	NetRxRate  float64 `json:"net_rx_rate"`
+	NetTxRate  float64 `json:"net_tx_rate"`
+}
+
 // StatsResponse is the payload returned by GET /api/containers.
 type StatsResponse struct {
 	Agent      AgentInfo        `json:"agent"`
+	Host       HostStats        `json:"host"`
 	Containers []ContainerState `json:"containers"`
 	Timestamp  int64            `json:"timestamp"`
 }

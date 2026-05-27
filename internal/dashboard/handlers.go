@@ -596,6 +596,32 @@ func loadTemplates(webFS fs.FS) (*template.Template, error) {
 		"clamp":             clamp,
 		"runningContainers": func(cs []types.ContainerState) []types.ContainerState { return filteredSorted(cs, true) },
 		"stoppedContainers": func(cs []types.ContainerState) []types.ContainerState { return filteredSorted(cs, false) },
+		"diskPercent": func(used, total uint64) float64 {
+			if total == 0 {
+				return 0
+			}
+			return float64(used) / float64(total) * 100
+		},
+		"cpuTextColor": func(pct float64) string {
+			switch {
+			case pct >= 80:
+				return "text-red-400"
+			case pct >= 50:
+				return "text-yellow-400"
+			default:
+				return "text-slate-200"
+			}
+		},
+		"diskTextColor": func(pct float64) string {
+			switch {
+			case pct >= 90:
+				return "text-red-400"
+			case pct >= 75:
+				return "text-yellow-400"
+			default:
+				return "text-slate-200"
+			}
+		},
 		"updatesAvailable": func(cs []types.ContainerState) int {
 			n := 0
 			for _, c := range cs {

@@ -30,6 +30,7 @@ type Config struct {
 type Agent struct {
 	cfg    Config
 	docker *DockerClient
+	host   *hostSampler
 
 	mu         sync.RWMutex
 	lastStats  types.StatsResponse
@@ -49,6 +50,7 @@ func New(cfg Config, docker *DockerClient) *Agent {
 	return &Agent{
 		cfg:         cfg,
 		docker:      docker,
+		host:        &hostSampler{},
 		updateCache: make(map[string]updateEntry),
 	}
 }
@@ -129,6 +131,7 @@ func (a *Agent) refresh(ctx context.Context) error {
 			UpdateInterval: int(a.cfg.UpdateInterval.Seconds()),
 			Version:        version,
 		},
+		Host:       a.host.sample(containers),
 		Containers: containers,
 		Timestamp:  time.Now().Unix(),
 	}
