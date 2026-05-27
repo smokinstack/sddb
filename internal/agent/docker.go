@@ -105,6 +105,16 @@ func (d *DockerClient) containerState(ctx context.Context, c dockertypes.Contain
 		}
 	}
 
+	// Inspect for restart/exit details — fast local socket call, non-fatal
+	if info, err := d.cli.ContainerInspect(ctx, c.ID); err == nil {
+		state.RestartCount = info.RestartCount
+		if info.State != nil {
+			state.ExitCode = info.State.ExitCode
+			state.OOMKilled = info.State.OOMKilled
+			state.FinishedAt = info.State.FinishedAt
+		}
+	}
+
 	return state, nil
 }
 

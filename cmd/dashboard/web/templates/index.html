@@ -176,6 +176,12 @@
                 d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/>
             </svg>
           </button>
+          <button id="logs-live-btn" onclick="toggleLiveLogs()"
+            class="flex items-center gap-1.5 px-2 py-1 text-xs text-slate-400 border border-slate-700 rounded transition-colors hover:text-white hover:border-slate-500"
+            title="Toggle live refresh (3s)">
+            <span id="logs-live-dot" class="w-1.5 h-1.5 rounded-full bg-slate-600"></span>
+            Live
+          </button>
           <button onclick="reloadLogs()" class="text-slate-400 hover:text-white transition-colors" title="Refresh">
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
@@ -243,6 +249,23 @@
       </div>
       <div class="p-6 space-y-6">
 
+        <!-- Display options -->
+        <div>
+          <label class="block text-sm font-medium text-slate-300 mb-3">Display</label>
+          <label class="flex items-center justify-between cursor-pointer group">
+            <span class="text-sm text-slate-300 group-hover:text-white transition-colors">Show stopped containers</span>
+            <button type="button" id="settings-show-stopped" onclick="toggleShowStopped()"
+              class="relative w-9 h-5 rounded-full transition-colors duration-200 focus:outline-none"
+              style="background:#22c55e">
+              <span id="settings-show-stopped-knob"
+                class="absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200"
+                style="transform:translateX(16px)"></span>
+            </button>
+          </label>
+        </div>
+
+        <div class="border-t border-slate-800"></div>
+
         <!-- AI Provider -->
         <div id="settings-ai-section">
           <label class="block text-sm font-medium text-slate-300 mb-3">AI Provider</label>
@@ -264,7 +287,10 @@
   <script>
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    function closeModal(id) { document.getElementById(id).classList.add('hidden'); }
+    function closeModal(id) {
+      document.getElementById(id).classList.add('hidden');
+      if (id === 'logs-modal' && _liveLogs) toggleLiveLogs();
+    }
 
     function showToast(msg, ok) {
       const t = document.createElement('div');
@@ -479,17 +505,22 @@
       await reloadLogs();
     }
 
-    async function reloadLogs() {
+    async function reloadLogs(silent = false) {
       const tail = document.getElementById('logs-tail').value;
       const content = document.getElementById('logs-content');
-      content.textContent = 'Loading…';
+      if (!silent) content.textContent = 'Loading…';
       try {
         const res = await fetch(`/api/logs?agent=${encodeURIComponent(_logsAgent)}&container=${encodeURIComponent(_logsContainer)}&tail=${tail}`);
-        _logsRaw = await res.text() || '(no output)';
-        applyLogsSearch();
+        const text = await res.text() || '(no output)';
+        if (text !== _logsRaw) {
+          _logsRaw = text;
+          applyLogsSearch();
+        }
       } catch(e) {
-        _logsRaw = '';
-        content.textContent = 'Error: ' + e.message;
+        if (!silent) {
+          _logsRaw = '';
+          content.textContent = 'Error: ' + e.message;
+        }
       }
     }
 
@@ -716,18 +747,74 @@
       });
     }
 
+    // ── Show / hide stopped containers ───────────────────────────────────────
+
+    const SHOW_STOPPED_KEY = 'sddb-show-stopped';
+
+    function getShowStopped() {
+      return localStorage.getItem(SHOW_STOPPED_KEY) !== 'false'; // default: show
+    }
+
+    function applyShowStopped() {
+      const show = getShowStopped();
+      document.querySelectorAll('[data-stopped-section]').forEach(el => {
+        el.classList.toggle('hidden', !show);
+      });
+      const btn = document.getElementById('settings-show-stopped');
+      const knob = document.getElementById('settings-show-stopped-knob');
+      if (btn) btn.style.background = show ? '#22c55e' : '#475569';
+      if (knob) knob.style.transform = show ? 'translateX(16px)' : 'translateX(0)';
+    }
+
+    function toggleShowStopped() {
+      localStorage.setItem(SHOW_STOPPED_KEY, getShowStopped() ? 'false' : 'true');
+      applyShowStopped();
+    }
+
+    // ── Live logs ─────────────────────────────────────────────────────────────
+
+    let _liveLogs = false;
+    let _liveLogsTimer = null;
+
+    function toggleLiveLogs() {
+      _liveLogs = !_liveLogs;
+      const btn = document.getElementById('logs-live-btn');
+      const dot = document.getElementById('logs-live-dot');
+      if (_liveLogs) {
+        btn.classList.add('text-green-400', 'border-green-500/40', 'bg-green-500/10');
+        btn.classList.remove('text-slate-400', 'border-slate-700');
+        dot.classList.add('pulse-dot', 'bg-green-500');
+        dot.classList.remove('bg-slate-600');
+        _liveLogsTimer = setInterval(async () => {
+          const out = document.getElementById('logs-output');
+          const atBottom = out.scrollHeight - out.scrollTop - out.clientHeight < 60;
+          await reloadLogs(true);
+          if (atBottom) out.scrollTop = out.scrollHeight;
+        }, 3000);
+      } else {
+        btn.classList.remove('text-green-400', 'border-green-500/40', 'bg-green-500/10');
+        btn.classList.add('text-slate-400', 'border-slate-700');
+        dot.classList.remove('pulse-dot', 'bg-green-500');
+        dot.classList.add('bg-slate-600');
+        clearInterval(_liveLogsTimer);
+        _liveLogsTimer = null;
+      }
+    }
+
     // Re-apply all state after every HTMX swap
     document.addEventListener('htmx:afterSwap', () => {
       applyCollapsed();
       applyCollapsedCards();
       applyHostFilter();
       applyAutoUpdateState();
+      applyShowStopped();
     });
     document.addEventListener('DOMContentLoaded', () => {
       loadConfig();
       applyCollapsed();
       applyCollapsedCards();
       applyHostFilter();
+      applyShowStopped();
     });
   </script>
 </body>

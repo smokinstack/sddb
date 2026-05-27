@@ -18,13 +18,15 @@ Communication between the dashboard and agents is secured with mutual TLS (mTLS)
 ## Features
 
 - **Multi-host sidebar** — filter the dashboard to a single host or view all at once
+- **Host summary bar** — per-host CPU, RAM, disk, and aggregate network I/O shown above container cards
 - **Live container stats** — CPU, memory, network I/O, ports, compose project
+- **Restart / exit history** — recent crashes, OOM kills, and exit codes surfaced directly on the container card (last 48 hours only)
 - **Update detection** — checks Docker Hub, GCR, GHCR, and any OCI-compatible registry
 - **One-click upgrade** — pulls the latest image and recreates the container (compose-aware)
 - **Auto-update** — per-container toggle; the dashboard upgrades automatically when a new image is available, with a 10-minute cooldown between attempts
-- **Log viewer** — view the last N lines of any container's logs, with search/filter and clipboard copy
+- **Log viewer** — view the last N lines of any container's logs, with search/filter, clipboard copy, and live auto-refresh
 - **AI analysis** — send logs or a health prompt to Claude, ChatGPT, or a local Ollama model for instant analysis
-- **Settings** — choose which AI provider to use when multiple are configured
+- **Settings** — choose AI provider; toggle visibility of stopped containers
 - **Admin authentication** — optional login; unprotected by default until you run `set-admin`
 - **mTLS security** — all agent communication is certificate-authenticated
 - **Systemd service files** — included for both components
@@ -239,6 +241,14 @@ If more than one provider is configured, open **Settings** (gear icon, top right
 
 If no provider is selected in settings, the dashboard automatically uses whichever is available, in priority order: **Claude → OpenAI → Ollama**.
 
+### Other settings
+
+The Settings panel also contains:
+
+| Setting | Default | Description |
+|---|---|---|
+| Show stopped containers | On | Hide/show stopped containers across all hosts. Saved in browser `localStorage`. |
+
 ### Claude (Anthropic)
 
 Sign up at [console.anthropic.com](https://console.anthropic.com), create an API key, and set `ANTHROPIC_API_KEY`. The dashboard uses the `claude-sonnet-4-6` model with a 2048-token response limit. Claude typically gives the most detailed and actionable analysis.
@@ -300,6 +310,56 @@ docker login
 ```
 
 Authenticated free accounts get 200 pulls per 6 hours. Docker Pro/Team accounts have no pull limit. Once logged in, compose pulls and standalone pulls will use your credentials automatically.
+
+---
+
+## Host Summary Bar
+
+Each agent panel shows a one-line summary of host-level resource usage above its container cards:
+
+```
+CPU 12% | RAM 9.2 GiB / 31.9 GiB | Disk 61% | Net ↓1.2 MiB/s ↑0.4 MiB/s
+```
+
+| Metric | Source |
+|---|---|
+| CPU | `/proc/stat` delta between poll cycles |
+| RAM | `/proc/meminfo` (MemTotal − MemAvailable) |
+| Disk | Root filesystem (`/`) via `statfs` |
+| Net | Sum of all container network rates |
+
+The bar is only shown once the agent has reported at least one poll cycle. CPU is 0% on the first cycle (needs two samples to compute a delta) and fills in normally from the second refresh onward.
+
+CPU turns yellow at 50% and red at 80%. Disk turns yellow at 75% and red at 90%.
+
+---
+
+## Restart / Exit History
+
+If a container has crashed, been OOM-killed, or exited non-zero within the last 48 hours, the container card shows a history line:
+
+```
+↻ 3 restarts   Exit 137 (OOMKilled) · 14m ago
+```
+
+- **↻ N restarts** — number of times Docker's restart policy has restarted the container
+- **Exit N** — last exit code (yellow for non-zero, red for OOM kill, grey for clean exit 0)
+- **OOMKilled** — shown when the kernel killed the container due to memory pressure
+- **· Xm ago** — time since the last exit
+
+The history line is hidden when the last exit was more than 48 hours ago to avoid noise from containers with large historical restart counts.
+
+---
+
+## Log Viewer
+
+Each container card has a **Logs** button that opens the log viewer. Features:
+
+- **Tail selector** — choose the last 50, 100, 200, 500, or 1000 lines
+- **Filter** — type to filter lines in real time (client-side, no re-fetch)
+- **Live refresh** — click **Live** to auto-refresh every 3 seconds. The panel updates silently in the background (no flicker); the view only scrolls to the bottom if you were already there, so you can scroll up to read without being interrupted. Click **Live** again or close the modal to stop.
+- **AI analysis** — send the current log output to your configured AI provider for instant analysis
+- **Clipboard copy** — copies the raw (unfiltered) log output
 
 ---
 

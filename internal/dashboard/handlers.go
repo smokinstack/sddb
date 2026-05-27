@@ -589,6 +589,8 @@ func loadTemplates(webFS fs.FS) (*template.Template, error) {
 		"stateClass":    stateClass,
 		"stateBadge":    stateBadge,
 		"since":         since,
+		"sinceRFC":      sinceRFC,
+		"recentExit":    recentExit,
 		"add":           func(a, b int) int { return a + b },
 		"itoa":          strconv.Itoa,
 		"cpuColor":          cpuColor,
@@ -767,6 +769,28 @@ func since(t time.Time) string {
 	default:
 		return fmt.Sprintf("%dh ago", int(d.Hours()))
 	}
+}
+
+func recentExit(s string) bool {
+	if s == "" || strings.HasPrefix(s, "0001-") {
+		return false
+	}
+	t, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		return false
+	}
+	return time.Since(t) < 48*time.Hour
+}
+
+func sinceRFC(s string) string {
+	if s == "" || strings.HasPrefix(s, "0001-") {
+		return ""
+	}
+	t, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		return ""
+	}
+	return since(t)
 }
 
 func tailLines(s string, n int) string {

@@ -44,6 +44,12 @@ type ContainerState struct {
 	UpdateAvailable bool     `json:"update_available"`
 	Created         int64    `json:"created"` // unix timestamp
 	Ports           []string `json:"ports"`
+
+	// Restart / exit history (from ContainerInspect)
+	RestartCount int    `json:"restart_count"`
+	ExitCode     int    `json:"exit_code"`
+	OOMKilled    bool   `json:"oom_killed"`
+	FinishedAt   string `json:"finished_at,omitempty"` // RFC3339Nano; "0001-…" = never exited
 }
 
 // IsCompose returns true when this container was started by Docker Compose.
