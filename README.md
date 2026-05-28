@@ -73,7 +73,28 @@ The easiest way to run the dashboard is with Docker Compose. Caddy is included a
 ### Prerequisites
 
 - Docker with the Compose plugin (`docker compose version` to verify)
-- A domain pointed at your server's IP (for Let's Encrypt), **or** skip Caddy for LAN use
+- A hostname for the dashboard — either a public domain or a local one (see below)
+
+### Choosing a hostname
+
+Caddy requires a hostname (not a bare IP address) to generate a valid TLS certificate. Pick one of:
+
+| Option | Example | How to access |
+|---|---|---|
+| **Public domain** | `sddb.example.com` | DNS A record → your server IP. Caddy gets a Let's Encrypt cert automatically. |
+| **LAN hostname** | `sddb.home` | Add to your router/Pi-hole DNS, or to the hosts file on each device. Caddy uses its internal CA (`tls internal`). |
+
+For a LAN hostname on Windows add to `C:\Windows\System32\drivers\etc\hosts`:
+```
+192.168.0.x   sddb.home
+```
+
+On Linux/Mac add to `/etc/hosts`:
+```
+192.168.0.x   sddb.home
+```
+
+For network-wide resolution without per-device changes, add the entry to your router's DNS or Pi-hole (`192.168.0.x sddb.home`).
 
 ### Setup
 
@@ -84,13 +105,32 @@ cd sddb
 
 # 2. Create your .env file
 cp .env.example .env
-# Edit .env and set SDDB_DOMAIN to your domain
+# Edit .env — set SDDB_DOMAIN to your chosen hostname (e.g. sddb.home or sddb.example.com)
 
-# 3. Start everything
+# 3. Update the Caddyfile for your setup (see below)
+
+# 4. Start everything
 docker compose up -d
 ```
 
-Caddy will obtain a TLS certificate on first start. The dashboard will be available at `https://your-domain`.
+**Caddyfile for a public domain** (Let's Encrypt cert, automatic):
+```
+{$SDDB_DOMAIN} {
+    reverse_proxy dashboard:8080
+}
+```
+
+**Caddyfile for a LAN hostname** (internal self-signed cert):
+```
+sddb.home {
+    tls internal
+    reverse_proxy dashboard:8080
+}
+```
+
+Replace `sddb.home` with whatever hostname you chose. On first start with `tls internal`, Caddy generates a local CA and issues a certificate — you'll see a browser warning until you import the CA cert (see [Trusting the local CA](#trusting-the-local-ca)).
+
+The dashboard will be available at `https://<your-hostname>`.
 
 ### Set an admin password
 
@@ -100,24 +140,36 @@ docker compose run --rm dashboard set-admin -data-dir /data
 
 ### Enroll agents
 
-Agent enrollment still runs on the dashboard host — Compose makes this straightforward:
-
 ```bash
 docker compose run --rm dashboard enroll <hostname> -data-dir /data -out /data/certs
 ```
 
-Cert files are written to the `sddb-data` volume at `/data/certs/`. Copy them to the agent host:
+This creates the CA (if it doesn't exist yet) and writes three cert files into the `sddb-data` volume under `/data/certs/`. **Restart the dashboard after the first enroll** so it picks up the new CA and activates mTLS:
 
 ```bash
-# Find the volume path on the host
-docker volume inspect sddb_sddb-data --format '{{ .Mountpoint }}'
-
-# Then scp from that path
-scp <mountpoint>/certs/<hostname>-agent.crt \
-    <mountpoint>/certs/<hostname>-agent.key \
-    <mountpoint>/certs/<hostname>-ca.crt \
-    user@<agent-host>:/etc/sddb/
+docker compose restart dashboard
 ```
+
+The dashboard log will confirm: `mTLS enabled — agents must present a certificate signed by the dashboard CA`.
+
+Find the cert files on the host and copy them to the agent:
+
+```bash
+VOL=$(docker volume inspect sddb_sddb-data --format '{{ .Mountpoint }}')
+
+# Agent on a remote host
+scp $VOL/certs/<hostname>-agent.crt user@<agent-host>:/tmp/agent.crt
+scp $VOL/certs/<hostname>-agent.key user@<agent-host>:/tmp/agent.key
+scp $VOL/certs/<hostname>-ca.crt    user@<agent-host>:/tmp/ca.crt
+ssh user@<agent-host> "sudo mv /tmp/agent.crt /tmp/agent.key /tmp/ca.crt /etc/sddb/"
+
+# Agent on the same host as the dashboard
+sudo cp $VOL/certs/<hostname>-agent.crt /etc/sddb/agent.crt
+sudo cp $VOL/certs/<hostname>-agent.key /etc/sddb/agent.key
+sudo cp $VOL/certs/<hostname>-ca.crt    /etc/sddb/ca.crt
+```
+
+The service unit expects the files named `agent.crt`, `agent.key`, and `ca.crt` — rename them on copy as shown above.
 
 ### Data persistence
 
@@ -562,9 +614,13 @@ curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo 
 sudo apt update && sudo apt install caddy
 ```
 
-### Caddyfile
+### Hostname requirement
 
-Edit `/etc/caddy/Caddyfile`:
+Caddy needs a hostname — not a bare IP — to generate a valid TLS certificate. Use a public domain or a local one (e.g. `sddb.home`) and make it resolve to your server via DNS or a hosts file entry. See [Choosing a hostname](#choosing-a-hostname) in the Docker section for options.
+
+### Caddyfile — public domain
+
+Create `/etc/caddy/Caddyfile`:
 
 ```
 sddb.example.com {
@@ -572,26 +628,44 @@ sddb.example.com {
 }
 ```
 
-Replace `sddb.example.com` with your domain. Caddy will automatically obtain and renew a Let's Encrypt certificate. The dashboard must be reachable on port `8080` locally.
+Caddy will automatically obtain and renew a Let's Encrypt certificate.
 
-Apply the config:
-
-```bash
-sudo systemctl reload caddy
-```
-
-### LAN-only HTTPS (local domain)
-
-If you don't have a public domain and just want HTTPS on your home network, Caddy can use a self-signed certificate:
+### Caddyfile — LAN hostname
 
 ```
-:443 {
+sddb.home {
     tls internal
     reverse_proxy localhost:8080
 }
 ```
 
-You'll need to trust Caddy's local CA on your devices. Caddy prints the CA cert path on first start — import it into your browser or OS trust store.
+Replace `sddb.home` with your chosen local hostname. Caddy generates an internal CA and issues a self-signed certificate on first start.
+
+Apply either config:
+
+```bash
+sudo systemctl enable --now caddy   # first time
+sudo systemctl reload caddy          # after changes
+```
+
+### Trusting the local CA
+
+When using `tls internal` you'll get a browser warning until you import Caddy's root CA. Extract it:
+
+```bash
+# Binary install
+sudo find /var/lib/caddy -name "root.crt" 2>/dev/null
+
+# Docker install
+docker cp sddb-caddy-1:/data/caddy/pki/authorities/local/root.crt ~/caddy-root.crt
+```
+
+Import the cert:
+
+- **Windows:** double-click → Install Certificate → Local Machine → Trusted Root Certification Authorities
+- **Mac:** double-click → Keychain Access → right-click → Get Info → Trust → Always Trust
+- **Linux (Chrome/Edge):** Settings → Privacy → Manage Certificates → Authorities → Import
+- **Linux system-wide:** `sudo cp caddy-root.crt /usr/local/share/ca-certificates/caddy.crt && sudo update-ca-certificates`
 
 ### Important: forwarded headers
 

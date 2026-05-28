@@ -1,16 +1,4 @@
-# Set SDDB_DOMAIN in your .env file, e.g. SDDB_DOMAIN=sddb.example.com
-# Caddy will automatically obtain a Let's Encrypt certificate for the domain.
-{$SDDB_DOMAIN} {
+sddbdash.site {
+    tls internal
     reverse_proxy dashboard:8080
 }
-
-# ── LAN / local domain ────────────────────────────────────────────────────────
-# If you don't have a public domain, replace the block above with:
-#
-# sddb.home {
-#     tls internal
-#     reverse_proxy dashboard:8080
-# }
-#
-# Then import Caddy's local CA into your browser/OS trust store.
-# The CA cert path is printed in `docker compose logs caddy` on first start.
