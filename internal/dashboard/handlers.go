@@ -33,6 +33,7 @@ type Dashboard struct {
 	tlsConfig *tls.Config // nil = plain HTTP to agents
 	creds     *auth.Credentials
 	sessions  *auth.Sessions
+	limiter   *loginLimiter
 	ai        *ai.Client
 	cfg       *config.Store
 }
@@ -52,7 +53,7 @@ func NewDashboard(state *State, poller *Poller, notify chan struct{}, webFS fs.F
 	if err != nil {
 		return nil, err
 	}
-	return &Dashboard{
+	d := &Dashboard{
 		state:     state,
 		poller:    poller,
 		notify:    notify,
@@ -64,7 +65,11 @@ func NewDashboard(state *State, poller *Poller, notify chan struct{}, webFS fs.F
 		sessions:  cfg.Sessions,
 		ai:        cfg.AI,
 		cfg:       cfg.Cfg,
-	}, nil
+	}
+	if cfg.Creds != nil {
+		d.limiter = newLoginLimiter()
+	}
+	return d, nil
 }
 
 func (d *Dashboard) Handler() http.Handler {
@@ -122,20 +127,33 @@ func (d *Dashboard) requireAuth(next http.Handler) http.Handler {
 
 func (d *Dashboard) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodPost {
+		ip := clientIP(r)
+		if d.limiter != nil && !d.limiter.allowed(ip) {
+			w.WriteHeader(http.StatusTooManyRequests)
+			d.tmpl.ExecuteTemplate(w, "login.html", map[string]string{"Error": "Too many failed attempts — try again later"})
+			return
+		}
 		username := r.FormValue("username")
 		password := r.FormValue("password")
 		if auth.Verify(d.creds, username, password) {
+			if d.limiter != nil {
+				d.limiter.recordSuccess(ip)
+			}
 			token := d.sessions.Create()
 			http.SetCookie(w, &http.Cookie{
 				Name:     auth.SessionCookie,
 				Value:    token,
 				Path:     "/",
 				HttpOnly: true,
+				Secure:   true,
 				SameSite: http.SameSiteStrictMode,
 				MaxAge:   int(24 * time.Hour / time.Second),
 			})
 			http.Redirect(w, r, "/", http.StatusSeeOther)
 			return
+		}
+		if d.limiter != nil {
+			d.limiter.recordFailure(ip)
 		}
 		w.WriteHeader(http.StatusUnauthorized)
 		d.tmpl.ExecuteTemplate(w, "login.html", map[string]string{"Error": "Invalid username or password"})
@@ -149,10 +167,13 @@ func (d *Dashboard) handleLogout(w http.ResponseWriter, r *http.Request) {
 		d.sessions.Delete(cookie.Value)
 	}
 	http.SetCookie(w, &http.Cookie{
-		Name:   auth.SessionCookie,
-		Value:  "",
-		Path:   "/",
-		MaxAge: -1,
+		Name:     auth.SessionCookie,
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteStrictMode,
+		MaxAge:   -1,
 	})
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }

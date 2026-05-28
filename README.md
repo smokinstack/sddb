@@ -36,16 +36,23 @@ Communication between the dashboard and agents is secured with mutual TLS (mTLS)
 
 ## Requirements
 
-- Go 1.22+ (to build)
 - Docker running on each monitored host
 - `docker compose` plugin (or legacy `docker-compose`) on agent hosts if you use Compose
 
 ---
 
-## Building
+## Releases
+
+Pre-built binaries for `linux/amd64`, `linux/arm64`, `darwin/amd64`, and `darwin/arm64` are available on the [Releases](https://github.com/smokinstack/sddb/releases) page.
+
+---
+
+## Building from source
+
+Requires Go 1.22+.
 
 ```bash
-git clone <repo>
+git clone https://github.com/smokinstack/sddb
 cd sddb
 
 # Build both binaries into bin/
@@ -59,17 +66,98 @@ Binaries are written to `bin/sddb-agent` and `bin/sddb-dashboard`.
 
 ---
 
-## Installation
+## Docker (recommended)
+
+The easiest way to run the dashboard is with Docker Compose. Caddy is included and handles HTTPS automatically.
+
+### Prerequisites
+
+- Docker with the Compose plugin (`docker compose version` to verify)
+- A domain pointed at your server's IP (for Let's Encrypt), **or** skip Caddy for LAN use
+
+### Setup
+
+```bash
+# 1. Clone the repo
+git clone https://github.com/smokinstack/sddb
+cd sddb
+
+# 2. Create your .env file
+cp .env.example .env
+# Edit .env and set SDDB_DOMAIN to your domain
+
+# 3. Start everything
+docker compose up -d
+```
+
+Caddy will obtain a TLS certificate on first start. The dashboard will be available at `https://your-domain`.
+
+### Set an admin password
+
+```bash
+docker compose run --rm dashboard set-admin -data-dir /data
+```
+
+### Enroll agents
+
+Agent enrollment still runs on the dashboard host — Compose makes this straightforward:
+
+```bash
+docker compose run --rm dashboard enroll <hostname> -data-dir /data -out /data/certs
+```
+
+Cert files are written to the `sddb-data` volume at `/data/certs/`. Copy them to the agent host:
+
+```bash
+# Find the volume path on the host
+docker volume inspect sddb_sddb-data --format '{{ .Mountpoint }}'
+
+# Then scp from that path
+scp <mountpoint>/certs/<hostname>-agent.crt \
+    <mountpoint>/certs/<hostname>-agent.key \
+    <mountpoint>/certs/<hostname>-ca.crt \
+    user@<agent-host>:/etc/sddb/
+```
+
+### Data persistence
+
+Dashboard data (PKI, config, agent list) is stored in the `sddb-data` named volume. Caddy certificates are in `caddy-data`. Both survive `docker compose down` — only `docker compose down -v` removes them.
+
+### Upgrading
+
+```bash
+docker compose pull   # if using a pre-built image from a registry
+docker compose build  # if building from source
+docker compose up -d
+```
+
+---
+
+## Installation (binary)
 
 ### Dashboard host
 
 The dashboard can run on any machine that has network access to your agent hosts. It does not need Docker installed.
 
+**Download and install the binary:**
+
 ```bash
-sudo make install-dashboard-service
+ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+VERSION=$(curl -fsSL https://api.github.com/repos/smokinstack/sddb/releases/latest | grep '"tag_name"' | cut -d'"' -f4)
+curl -fsSL "https://github.com/smokinstack/sddb/releases/download/${VERSION}/sddb-dashboard_${VERSION}_linux_${ARCH}.tar.gz" \
+  | tar xz -C /tmp
+sudo install -m755 /tmp/sddb-dashboard /usr/local/bin/
 ```
 
-This installs the binary to `/usr/local/bin/sddb-dashboard` and the systemd unit to `/etc/systemd/system/sddb-dashboard.service`. Data (PKI, config, agent list) is stored in `/var/lib/sddb`.
+**Install the systemd unit:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/smokinstack/sddb/main/deploy/sddb-dashboard.service \
+  | sudo tee /etc/systemd/system/sddb-dashboard.service
+sudo systemctl daemon-reload
+```
+
+Data (PKI, config, agent list) is stored in `/var/lib/sddb`.
 
 **Set an admin password** (optional but recommended):
 
@@ -85,7 +173,7 @@ You will be prompted for a username and password. If you skip this step the dash
 sudo systemctl enable --now sddb-dashboard
 ```
 
-The dashboard listens on port `8080` by default. Open `http://<host>:8080` in your browser.
+The dashboard listens on port `8080` by default. Open `http://<host>:8080` in your browser (or put Caddy in front — see the [Reverse Proxy](#reverse-proxy-caddy) section).
 
 ---
 
@@ -111,61 +199,53 @@ You only need to do this once per agent. Existing certificates are reused — re
 
 #### Step 2 — Copy files to the agent host
 
+On the agent host, create the directory and a dedicated user:
+
 ```bash
-scp /tmp/certs/<hostname>-agent.crt \
-    /tmp/certs/<hostname>-agent.key \
-    /tmp/certs/<hostname>-ca.crt \
-    user@<agent-host>:/etc/sddb/
+sudo useradd -r -s /sbin/nologin sddb
+sudo usermod -aG docker sddb
+sudo mkdir -p /etc/sddb
+sudo chown sddb:sddb /etc/sddb
+sudo chmod 750 /etc/sddb
 ```
 
-Create the directory first if needed:
+Copy the cert files from the dashboard host, renaming them to the standard names the service unit expects:
 
 ```bash
-ssh user@<agent-host> "sudo mkdir -p /etc/sddb"
+scp /tmp/certs/<hostname>-agent.crt user@<agent-host>:/tmp/agent.crt
+scp /tmp/certs/<hostname>-agent.key user@<agent-host>:/tmp/agent.key
+scp /tmp/certs/<hostname>-ca.crt    user@<agent-host>:/tmp/ca.crt
+
+ssh user@<agent-host> "sudo mv /tmp/agent.crt /tmp/agent.key /tmp/ca.crt /etc/sddb/ \
+  && sudo chown sddb:sddb /etc/sddb/* \
+  && sudo chmod 640 /etc/sddb/agent.crt /etc/sddb/ca.crt \
+  && sudo chmod 600 /etc/sddb/agent.key"
 ```
 
 #### Step 3 — Install the agent binary
 
-```bash
-scp bin/sddb-agent user@<agent-host>:/tmp/sddb-agent
-ssh user@<agent-host> "sudo install -m 755 /tmp/sddb-agent /usr/local/bin/sddb-agent"
-```
-
-#### Step 4 — Install the systemd unit
-
-Copy `deploy/sddb-agent.service` to the agent host:
+On the agent host:
 
 ```bash
-scp deploy/sddb-agent.service user@<agent-host>:/tmp/
-ssh user@<agent-host> "sudo cp /tmp/sddb-agent.service /etc/systemd/system/ && sudo systemctl daemon-reload"
+ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+VERSION=$(curl -fsSL https://api.github.com/repos/smokinstack/sddb/releases/latest | grep '"tag_name"' | cut -d'"' -f4)
+curl -fsSL "https://github.com/smokinstack/sddb/releases/download/${VERSION}/sddb-agent_${VERSION}_linux_${ARCH}.tar.gz" \
+  | tar xz -C /tmp
+sudo install -m755 /tmp/sddb-agent /usr/local/bin/
 ```
 
-#### Step 5 — Configure mTLS for the agent
-
-On the agent host, create a systemd override to add the certificate flags:
+#### Step 4 — Install and start the systemd unit
 
 ```bash
-sudo systemctl edit sddb-agent
-```
-
-Add:
-
-```ini
-[Service]
-ExecStart=
-ExecStart=/usr/local/bin/sddb-agent -addr :8484 -interval 5s \
-  -tls-cert /etc/sddb/<hostname>-agent.crt \
-  -tls-key  /etc/sddb/<hostname>-agent.key \
-  -tls-ca   /etc/sddb/<hostname>-ca.crt
-```
-
-Then start:
-
-```bash
+curl -fsSL https://raw.githubusercontent.com/smokinstack/sddb/main/deploy/sddb-agent.service \
+  | sudo tee /etc/systemd/system/sddb-agent.service
+sudo systemctl daemon-reload
 sudo systemctl enable --now sddb-agent
 ```
 
-#### Step 6 — Add the agent to the dashboard
+No override needed — the service unit already points to `/etc/sddb/agent.crt`, `/etc/sddb/agent.key`, and `/etc/sddb/ca.crt`.
+
+#### Step 5 — Add the agent to the dashboard
 
 Open the dashboard, click **+ Add Agent**, enter the agent's IP and port (e.g. `192.168.1.10:8484`), and optionally give it a label. It will appear as online within one poll cycle.
 
@@ -173,17 +253,16 @@ Open the dashboard, click **+ Add Agent**, enter the agent's IP and port (e.g. `
 
 ## Upgrading binaries
 
-After rebuilding with `make build`:
+Re-run the install one-liners from above — they always pull the latest release. Then restart the service:
 
 **Dashboard:**
 ```bash
-sudo make install && sudo systemctl restart sddb-dashboard
+sudo systemctl restart sddb-dashboard
 ```
 
 **Each agent host:**
 ```bash
-scp bin/sddb-agent user@<host>:/tmp/sddb-agent
-ssh user@<host> "sudo install -m 755 /tmp/sddb-agent /usr/local/bin/sddb-agent && sudo systemctl restart sddb-agent"
+sudo systemctl restart sddb-agent
 ```
 
 ---
@@ -388,7 +467,7 @@ When a host or the master toggle is muted, the dashboard still tracks container 
 | Container OOM-killed and restarted | high | As above, OOMKilled flag set |
 | Container crashed and stopped | default | `running` → `exited` with non-zero exit code |
 | Container OOM-killed and stopped | high | As above, OOMKilled flag set |
-| **Crash loop detected** | urgent | 3 or more crash events within 15 minutes |
+| **Crash loop detected** | urgent | 2 or more crash events within 15 minutes |
 | **Container recovered** | low | Stable for 10 minutes after crash-loop suppression |
 | Clean stop (exit 0) | — | No alert — assumed intentional |
 
@@ -397,9 +476,8 @@ When a host or the master toggle is muted, the dashboard still tracks container 
 If a container crashes repeatedly, SDDB escalates and then goes quiet to avoid flooding your phone:
 
 1. First crash → normal alert
-2. Second crash → normal alert (after 5-minute cooldown)
-3. Third crash within 15 minutes → **"Crash loop" urgent alert**, then all further alerts for that container are suppressed
-4. Once the container has been running without a new restart for 10 minutes → single **"Recovered"** alert, normal alerting resumes
+2. Second crash within 15 minutes → **"Crash loop" urgent alert**, then all further alerts for that container are suppressed
+3. Once the container has been running without a new restart for 10 minutes → single **"Recovered"** alert, normal alerting resumes
 
 The 15-minute crash window is a rolling timestamp check, not a poll-cycle count, so fast restart loops are caught quickly regardless of poll interval.
 
@@ -471,9 +549,66 @@ deploy/
 
 ---
 
+## Reverse Proxy (Caddy)
+
+If you want to expose the dashboard over the internet or enable HTTPS on your LAN, Caddy is the simplest option — it handles TLS certificates automatically via Let's Encrypt.
+
+### Install Caddy
+
+```bash
+sudo apt install -y debian-keyring debian-archive-keyring apt-transport-https curl
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list
+sudo apt update && sudo apt install caddy
+```
+
+### Caddyfile
+
+Edit `/etc/caddy/Caddyfile`:
+
+```
+sddb.example.com {
+    reverse_proxy localhost:8080
+}
+```
+
+Replace `sddb.example.com` with your domain. Caddy will automatically obtain and renew a Let's Encrypt certificate. The dashboard must be reachable on port `8080` locally.
+
+Apply the config:
+
+```bash
+sudo systemctl reload caddy
+```
+
+### LAN-only HTTPS (local domain)
+
+If you don't have a public domain and just want HTTPS on your home network, Caddy can use a self-signed certificate:
+
+```
+:443 {
+    tls internal
+    reverse_proxy localhost:8080
+}
+```
+
+You'll need to trust Caddy's local CA on your devices. Caddy prints the CA cert path on first start — import it into your browser or OS trust store.
+
+### Important: forwarded headers
+
+The login rate limiter reads `X-Forwarded-For` to get the real client IP when sitting behind a proxy. Caddy sets this header automatically — no extra configuration needed.
+
+### HTTPS and the session cookie
+
+The session cookie has `Secure: true` set, which means it will only be sent over HTTPS. The dashboard will work correctly once Caddy is in front. If you access `http://` directly (without Caddy), the login cookie won't be sent by the browser and you will be redirected back to `/login` — this is expected behaviour.
+
+---
+
 ## Security notes
 
 - Without `set-admin` the dashboard has **no authentication**. Anyone on your network can access it. Set a password before exposing it outside a trusted LAN.
+- The login endpoint rate-limits by IP: **5 failed attempts within 15 minutes** triggers a 15-minute lockout. The counter resets on a successful login.
+- The session cookie is `HttpOnly`, `Secure`, and `SameSite=Strict`. The `Secure` flag means the cookie is only sent over HTTPS — use Caddy (or another TLS proxy) when exposing the dashboard publicly.
 - mTLS ensures only agents with certificates signed by your CA can communicate with the dashboard. Each agent host must be enrolled separately.
 - AI provider API keys are stored only as environment variables — never written to disk or exposed in the UI.
 - `/var/lib/sddb` is created with mode `0700`. The config file is written with mode `0600`.
+- The agent service runs as a dedicated `sddb` user (member of the `docker` group) with `NoNewPrivileges` and a read-only filesystem outside `/etc/sddb`.

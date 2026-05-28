@@ -1,12 +1,31 @@
 [Unit]
 Description=SDDB Container Agent
-After=docker.service
+Documentation=https://github.com/smokinstack/sddb
+After=docker.service network-online.target
 Requires=docker.service
+Wants=network-online.target
 
 [Service]
-ExecStart=/usr/local/bin/sddb-agent -addr :8484 -interval 5s
+ExecStart=/usr/local/bin/sddb-agent \
+  -addr :8484 \
+  -interval 5s \
+  -tls-cert /etc/sddb/agent.crt \
+  -tls-key  /etc/sddb/agent.key \
+  -tls-ca   /etc/sddb/ca.crt
+
+# Drop privileges — run as the sddb user (must be in the docker group)
+User=sddb
+Group=sddb
+
+# Restart on failure with a short back-off
 Restart=on-failure
 RestartSec=5s
+
+# Basic hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/etc/sddb
 
 [Install]
 WantedBy=multi-user.target

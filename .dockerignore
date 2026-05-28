@@ -1,0 +1,7 @@
+bin/
+certs/
+*.crt
+*.key
+agents.json
+.env
+dist/
