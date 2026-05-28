@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/docker/docker/api/types/image"
-	"github.com/jester/sddb/internal/types"
+	"github.com/smokinstack/sddb/internal/types"
 )
 
 const version = "1.0.0"

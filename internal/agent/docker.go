@@ -17,7 +17,7 @@ import (
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
-	"github.com/jester/sddb/internal/types"
+	"github.com/smokinstack/sddb/internal/types"
 )
 
 type prevNetStats struct {

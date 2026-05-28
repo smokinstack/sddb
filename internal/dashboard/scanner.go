@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jester/sddb/internal/types"
+	"github.com/smokinstack/sddb/internal/types"
 )
 
 // ScanResult describes a discovered agent on the network.

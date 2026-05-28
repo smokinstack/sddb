@@ -9,9 +9,11 @@ import (
 
 // Config holds all user-configurable dashboard settings.
 type Config struct {
-	AIProvider string          `json:"ai_provider"` // "", "claude", "openai", "ollama"
-	AutoUpdate map[string]bool `json:"auto_update"` // "agentAddr::containerName" → enabled
-	NtfyURL    string          `json:"ntfy_url"`    // full topic URL, e.g. https://ntfy.sh/my-alerts
+	AIProvider        string          `json:"ai_provider"`         // "", "claude", "openai", "ollama"
+	AutoUpdate        map[string]bool `json:"auto_update"`         // "agentAddr::containerName" → enabled
+	NtfyURL           string          `json:"ntfy_url"`            // full topic URL, e.g. https://ntfy.sh/my-alerts
+	NtfyDisabled      bool            `json:"ntfy_disabled"`       // master kill-switch; false = enabled
+	NtfyDisabledHosts map[string]bool `json:"ntfy_disabled_hosts"` // agentAddr → true means muted
 }
 
 // Store is a thread-safe config loader/saver backed by a JSON file.
@@ -39,6 +41,9 @@ func Load(dataDir string) (*Store, error) {
 	}
 	if s.cfg.AutoUpdate == nil {
 		s.cfg.AutoUpdate = make(map[string]bool)
+	}
+	if s.cfg.NtfyDisabledHosts == nil {
+		s.cfg.NtfyDisabledHosts = make(map[string]bool)
 	}
 	return s, nil
 }

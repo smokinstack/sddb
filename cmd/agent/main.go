@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jester/sddb/internal/agent"
-	"github.com/jester/sddb/internal/pki"
+	"github.com/smokinstack/sddb/internal/agent"
+	"github.com/smokinstack/sddb/internal/pki"
 )
 
 func main() {

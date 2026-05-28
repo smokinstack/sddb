@@ -8,7 +8,7 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/jester/sddb/internal/types"
+	"github.com/smokinstack/sddb/internal/types"
 )
 
 type hostSampler struct {

@@ -1,4 +1,4 @@
-module github.com/jester/sddb
+module github.com/smokinstack/sddb
 
 go 1.25.0
 

@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jester/sddb/internal/config"
-	"github.com/jester/sddb/internal/types"
+	"github.com/smokinstack/sddb/internal/config"
+	"github.com/smokinstack/sddb/internal/types"
 )
 
 type containerKey struct {
@@ -42,7 +42,7 @@ type containerAlert struct {
 }
 
 const (
-	loopThreshold    = 3               // crash events within loopWindow triggers suppression
+	loopThreshold    = 2               // crash events within loopWindow triggers suppression
 	loopWindow       = 15 * time.Minute
 	alertCooldown    = 5 * time.Minute  // minimum gap between individual crash alerts
 	recoveryDuration = 10 * time.Minute // stable run required before clearing suppression
@@ -65,7 +65,10 @@ func newNotifier(cfg *config.Store) *Notifier {
 }
 
 func (n *Notifier) Check(agentAddr string, containers []types.ContainerState) {
-	ntfyURL := n.cfg.Get().NtfyURL
+	cfg := n.cfg.Get()
+	ntfyURL := cfg.NtfyURL
+	// Master kill-switch or per-host mute: still track state but send nothing.
+	muted := cfg.NtfyDisabled || cfg.NtfyDisabledHosts[agentAddr]
 
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -103,7 +106,7 @@ func (n *Notifier) Check(agentAddr string, containers []types.ContainerState) {
 
 			a.status = statusNormal
 			a.crashTimes = nil
-			if ntfyURL != "" {
+			if ntfyURL != "" && !muted {
 				go n.send(ntfyURL,
 					fmt.Sprintf("Recovered: %s", c.Name),
 					fmt.Sprintf("Container has been stable for %s on %s.", recoveryDuration, agentAddr),
@@ -143,7 +146,7 @@ func (n *Notifier) Check(agentAddr string, containers []types.ContainerState) {
 			// Exit 0 = intentional stop — no alert
 		}
 
-		if !isCrash || ntfyURL == "" {
+		if !isCrash || ntfyURL == "" || muted {
 			continue
 		}
 

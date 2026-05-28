@@ -269,6 +269,17 @@
         <!-- Notifications -->
         <div>
           <label class="block text-sm font-medium text-slate-300 mb-3">Notifications</label>
+          <!-- Master toggle -->
+          <label class="flex items-center justify-between cursor-pointer group mb-4">
+            <span class="text-sm text-slate-300 group-hover:text-white transition-colors">Enable push notifications</span>
+            <button type="button" id="settings-ntfy-master" onclick="toggleNtfyMaster()"
+              class="relative w-9 h-5 rounded-full transition-colors duration-200 focus:outline-none"
+              style="background:#475569">
+              <span id="settings-ntfy-master-knob"
+                class="absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200"
+                style="transform:translateX(0)"></span>
+            </button>
+          </label>
           <div>
             <label class="block text-xs text-slate-400 mb-1.5">
               ntfy URL
@@ -494,8 +505,38 @@
       }
       const ntfyInput = document.getElementById('settings-ntfy-url');
       if (ntfyInput) ntfyInput.value = _cfg.ntfy_url || '';
+      applyNtfyMasterUI();
 
       document.getElementById('settings-modal').classList.remove('hidden');
+    }
+
+    function applyNtfyMasterUI() {
+      const enabled = !_cfg.ntfy_disabled;
+      const btn = document.getElementById('settings-ntfy-master');
+      const knob = document.getElementById('settings-ntfy-master-knob');
+      if (btn) btn.style.background = enabled ? '#22c55e' : '#475569';
+      if (knob) knob.style.transform = enabled ? 'translateX(16px)' : 'translateX(0)';
+    }
+
+    async function toggleNtfyMaster() {
+      await patchConfig({ntfy_disabled: !_cfg.ntfy_disabled});
+      applyNtfyMasterUI();
+    }
+
+    function applyNtfyHostState() {
+      document.querySelectorAll('[data-ntfy-host]').forEach(btn => {
+        const muted = !!_cfg.ntfy_disabled_hosts?.[btn.dataset.ntfyHost];
+        btn.querySelector('.ntfy-bell-on').classList.toggle('hidden', muted);
+        btn.querySelector('.ntfy-bell-off').classList.toggle('hidden', !muted);
+        btn.className = btn.className.replace(/text-slate-\d+/g, '').trim()
+          + (muted ? ' text-slate-600' : ' text-slate-400 hover:text-white');
+        btn.title = muted ? 'Alerts muted for this host — click to unmute' : 'Mute alerts for this host';
+      });
+    }
+
+    async function toggleNtfyHost(addr) {
+      await patchConfig({toggle_ntfy_host: addr});
+      applyNtfyHostState();
     }
 
     async function saveNtfyUrl() {
@@ -868,6 +909,7 @@
       applyHostFilter();
       applyAutoUpdateState();
       applyShowStopped();
+      applyNtfyHostState();
     });
     document.addEventListener('DOMContentLoaded', () => {
       loadConfig();
@@ -875,6 +917,7 @@
       applyCollapsedCards();
       applyHostFilter();
       applyShowStopped();
+      applyNtfyHostState();
     });
   </script>
 </body>

@@ -14,11 +14,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/jester/sddb/internal/ai"
-	"github.com/jester/sddb/internal/auth"
-	"github.com/jester/sddb/internal/config"
-	"github.com/jester/sddb/internal/dashboard"
-	"github.com/jester/sddb/internal/pki"
+	"github.com/smokinstack/sddb/internal/ai"
+	"github.com/smokinstack/sddb/internal/auth"
+	"github.com/smokinstack/sddb/internal/config"
+	"github.com/smokinstack/sddb/internal/dashboard"
+	"github.com/smokinstack/sddb/internal/pki"
 	"golang.org/x/term"
 )
 

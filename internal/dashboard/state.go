@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jester/sddb/internal/types"
+	"github.com/smokinstack/sddb/internal/types"
 )
 
 // AgentRecord tracks a known agent and its most recent stats.

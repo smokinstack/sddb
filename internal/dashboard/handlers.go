@@ -16,10 +16,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jester/sddb/internal/ai"
-	"github.com/jester/sddb/internal/auth"
-	"github.com/jester/sddb/internal/config"
-	"github.com/jester/sddb/internal/types"
+	"github.com/smokinstack/sddb/internal/ai"
+	"github.com/smokinstack/sddb/internal/auth"
+	"github.com/smokinstack/sddb/internal/config"
+	"github.com/smokinstack/sddb/internal/types"
 )
 
 // Dashboard wires together state, poller, and HTTP handlers.
@@ -266,12 +266,16 @@ func (d *Dashboard) handleConfig(w http.ResponseWriter, r *http.Request) {
 			"auto_update":         cfg.AutoUpdate,
 			"available_providers": providers,
 			"ntfy_url":            cfg.NtfyURL,
+			"ntfy_disabled":       cfg.NtfyDisabled,
+			"ntfy_disabled_hosts": cfg.NtfyDisabledHosts,
 		})
 
 	case http.MethodPatch:
 		var req struct {
 			AIProvider       *string `json:"ai_provider"`
 			NtfyURL          *string `json:"ntfy_url"`
+			NtfyDisabled     *bool   `json:"ntfy_disabled"`
+			ToggleNtfyHost   *string `json:"toggle_ntfy_host"`
 			ToggleAutoUpdate *struct {
 				Addr string `json:"addr"`
 				Name string `json:"name"`
@@ -287,6 +291,15 @@ func (d *Dashboard) handleConfig(w http.ResponseWriter, r *http.Request) {
 			}
 			if req.NtfyURL != nil {
 				c.NtfyURL = *req.NtfyURL
+			}
+			if req.NtfyDisabled != nil {
+				c.NtfyDisabled = *req.NtfyDisabled
+			}
+			if req.ToggleNtfyHost != nil {
+				if c.NtfyDisabledHosts == nil {
+					c.NtfyDisabledHosts = make(map[string]bool)
+				}
+				c.NtfyDisabledHosts[*req.ToggleNtfyHost] = !c.NtfyDisabledHosts[*req.ToggleNtfyHost]
 			}
 			if req.ToggleAutoUpdate != nil {
 				key := req.ToggleAutoUpdate.Addr + "::" + req.ToggleAutoUpdate.Name
@@ -306,6 +319,8 @@ func (d *Dashboard) handleConfig(w http.ResponseWriter, r *http.Request) {
 			"auto_update":         cfg.AutoUpdate,
 			"available_providers": providers,
 			"ntfy_url":            cfg.NtfyURL,
+			"ntfy_disabled":       cfg.NtfyDisabled,
+			"ntfy_disabled_hosts": cfg.NtfyDisabledHosts,
 		})
 
 	default:

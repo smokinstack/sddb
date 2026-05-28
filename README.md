@@ -26,7 +26,7 @@ Communication between the dashboard and agents is secured with mutual TLS (mTLS)
 - **Auto-update** — per-container toggle; the dashboard upgrades automatically when a new image is available, with a 10-minute cooldown between attempts
 - **Log viewer** — view the last N lines of any container's logs, with search/filter, clipboard copy, and live auto-refresh
 - **AI analysis** — send logs or a health prompt to Claude, ChatGPT, or a local Ollama model for instant analysis
-- **Notifications** — ntfy push alerts on crash, OOM kill, or restart loop, with automatic crash-loop suppression and recovery notification
+- **Notifications** — ntfy push alerts on crash, OOM kill, or restart loop; master on/off toggle plus per-host mute; automatic crash-loop suppression and recovery notification
 - **Settings** — choose AI provider; configure ntfy URL; toggle visibility of stopped containers
 - **Admin authentication** — optional login; unprotected by default until you run `set-admin`
 - **mTLS security** — all agent communication is certificate-authenticated
@@ -249,7 +249,9 @@ The Settings panel also contains:
 | Setting | Default | Description |
 |---|---|---|
 | Show stopped containers | On | Hide/show stopped containers across all hosts. Saved in browser `localStorage`. |
-| ntfy URL | — | Full topic URL for push notifications. Saved to `config.json`. Leave blank to disable. |
+| Enable push notifications | Off | Master on/off for all ntfy alerts. Saved to `config.json`. |
+| ntfy URL | — | Full topic URL for push notifications. Saved to `config.json`. |
+| Per-host bell icon | On | Mutes/unmutes alerts for a specific host. Bell gains a strikethrough when muted. Saved to `config.json`. |
 
 ### Claude (Anthropic)
 
@@ -363,10 +365,20 @@ SDDB can push alerts to any [ntfy](https://ntfy.sh) topic when a container crash
    - Public: `https://ntfy.sh/my-homelab-alerts` (use a hard-to-guess name)
    - Self-hosted: `https://ntfy.example.com/my-topic`
 2. Subscribe to the topic in the ntfy app on your phone or browser.
-3. Open **Settings** in the dashboard, paste the URL into the **ntfy URL** field, and click **Save**.
+3. Open **Settings** in the dashboard, enable the **Enable push notifications** toggle, paste the URL into the **ntfy URL** field, and click **Save**.
 4. Click **Test** to send a test notification and confirm it arrives before relying on it.
 
-The URL is saved to `/var/lib/sddb/config.json` and takes effect immediately — no restart needed. Leave the field blank to disable notifications.
+The URL and all notification settings are saved to `/var/lib/sddb/config.json` and take effect immediately — no restart needed.
+
+### Enabling and disabling
+
+There are two levels of control:
+
+**Master toggle** — in Settings > Notifications. Turns all alerts on or off globally. Useful when doing maintenance and you don't want your phone buzzing. The per-host mute states are preserved and take effect again when you re-enable.
+
+**Per-host mute** — the bell icon in each host panel header. Click it to silence alerts for all containers on that host. The bell gains a diagonal strikethrough when muted. Click again to unmute. Muting a host does not affect other hosts.
+
+When a host or the master toggle is muted, the dashboard still tracks container state internally (crash-loop counters, stability timers) so it picks up correctly when alerts are re-enabled rather than firing a burst of stale alerts.
 
 ### What triggers an alert
 

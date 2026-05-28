@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jester/sddb/internal/config"
-	"github.com/jester/sddb/internal/types"
+	"github.com/smokinstack/sddb/internal/config"
+	"github.com/smokinstack/sddb/internal/types"
 )
 
 // Poller periodically fetches stats from all known agents.
