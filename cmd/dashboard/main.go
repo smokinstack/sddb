@@ -209,7 +209,7 @@ func runEnroll(args []string) {
 // ── dashboard server ──────────────────────────────────────────────────────────
 
 func runDashboard() {
-	addr := flag.String("addr", ":8080", "dashboard listen address")
+	addr := flag.String("addr", envOr("SDDB_ADDR", ":8080"), "dashboard listen address (env: SDDB_ADDR)")
 	pollInterval := flag.Duration("poll", 5*time.Second, "agent poll interval")
 	agentPort := flag.Int("agent-port", 8484, "default agent port for network scan and bare-IP adds")
 	dataDir := flag.String("data-dir", defaultDataDir(), "data directory (stores PKI and agent list)")
@@ -325,6 +325,13 @@ func defaultDataDir() string {
 		return ".sddb"
 	}
 	return filepath.Join(home, ".sddb")
+}
+
+func envOr(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
 }
 
 func ensureDashboardCert(dataDir string, ca *pki.CA) {

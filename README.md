@@ -136,6 +136,8 @@ The dashboard will be available at `https://<your-hostname>`.
 
 ### Set an admin password
 
+On first visit the dashboard redirects to a setup page where you create the admin account in the browser. Alternatively, run the CLI:
+
 ```bash
 docker compose run --rm dashboard set-admin -data-dir /data
 ```
@@ -172,6 +174,12 @@ sudo cp $VOL/certs/<hostname>-ca.crt    /etc/sddb/ca.crt
 ```
 
 The service unit expects the files named `agent.crt`, `agent.key`, and `ca.crt` — rename them on copy as shown above.
+
+> **If the data volume is cleared** (e.g. after `docker compose down -v`), the CA is lost and existing agent certs will no longer verify. Re-run `enroll` to generate a new CA, copy the new certs to each agent host, and restart the agent service. The dashboard will show `agent returned 400` until this is done.
+
+### Network scan
+
+The **Scan Network** feature in the Add Agent dialog auto-detects the local subnet. When running the dashboard inside Docker, the auto-detected range will be the Docker internal network (e.g. `172.x.x.x`) rather than your host LAN. Enter your LAN CIDR manually (e.g. `192.168.0.0/24`) to scan the correct range.
 
 ### Data persistence
 
@@ -219,7 +227,7 @@ Data (PKI, config, agent list) is stored in `/var/lib/sddb`.
 sudo sddb-dashboard set-admin -data-dir /var/lib/sddb
 ```
 
-You will be prompted for a username and password. If you skip this step the dashboard is accessible without login — add it any time and restart the service to activate it.
+You will be prompted for a username and password. If you skip this step, the dashboard will redirect to a web-based setup page on first visit where you can create the account in the browser instead.
 
 **Start the service:**
 
@@ -556,17 +564,18 @@ Each container card has a **Logs** button that opens the log viewer. Features:
 ```
 sddb-dashboard                   start the dashboard
 sddb-dashboard set-admin         create or update the admin login
+sddb-dashboard reset-admin       reset the admin password (keeps existing username if blank)
 sddb-dashboard enroll <name>     issue an mTLS certificate for an agent
 ```
 
 ### Dashboard flags
 
-| Flag | Default | Description |
-|---|---|---|
-| `-addr` | `:8080` | Listen address |
-| `-poll` | `5s` | Agent poll interval |
-| `-agent-port` | `8484` | Default port for network scan and bare-IP adds |
-| `-data-dir` | `~/.sddb` | Data directory (PKI, config, agent list) |
+| Flag | Default | Env var | Description |
+|---|---|---|---|
+| `-addr` | `:8080` | `SDDB_ADDR` | Listen address |
+| `-poll` | `5s` | — | Agent poll interval |
+| `-agent-port` | `8484` | — | Default port for network scan and bare-IP adds |
+| `-data-dir` | `~/.sddb` | — | Data directory (PKI, config, agent list) |
 
 ### Agent flags
 
@@ -718,7 +727,10 @@ The login rate limiter reads `X-Forwarded-For` to get the real client IP when si
 
 ### HTTPS and the session cookie
 
-The session cookie has `Secure: true` set, which means it will only be sent over HTTPS. The dashboard will work correctly once Caddy is in front. If you access `http://` directly (without Caddy), the login cookie won't be sent by the browser and you will be redirected back to `/login` — this is expected behaviour.
+The session cookie's `Secure` flag is set automatically based on whether the request arrived over HTTPS (either directly or via `X-Forwarded-Proto: https` from a proxy). This means:
+
+- **Behind Caddy or another HTTPS proxy** — `Secure` is set, cookie is only sent over HTTPS. Correct behaviour.
+- **Plain HTTP** (direct access on a trusted LAN) — `Secure` is not set, login works without a proxy.
 
 ---
 
