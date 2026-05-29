@@ -704,7 +704,10 @@ docker cp sddb-caddy-1:/data/caddy/pki/authorities/local/root.crt ~/caddy-root.c
 
 Import the cert:
 
-- **Windows:** double-click → Install Certificate → Local Machine → Trusted Root Certification Authorities
+- **Windows:** convert to DER format first, then double-click the `.cer` file → Install Certificate → Local Machine → Trusted Root Certification Authorities
+  ```bash
+  openssl x509 -in ~/caddy-root.crt -outform DER -out ~/caddy-root.cer
+  ```
 - **Mac:** double-click → Keychain Access → right-click → Get Info → Trust → Always Trust
 - **Linux (Chrome/Edge):** Settings → Privacy → Manage Certificates → Authorities → Import
 - **Linux system-wide:** `sudo cp caddy-root.crt /usr/local/share/ca-certificates/caddy.crt && sudo update-ca-certificates`
