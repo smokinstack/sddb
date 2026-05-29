@@ -607,7 +607,7 @@ deploy/
 
 If you already have Nginx Proxy Manager, Traefik, or any other reverse proxy running on your server, it will already own port 443. Adding Caddy to the mix causes a port conflict — only one process can bind port 443.
 
-In this case, remove Caddy from the compose file and expose the dashboard directly on a host port:
+Remove the `caddy` service from `docker-compose.yml` and expose the dashboard directly on a host port instead:
 
 ```yaml
 services:
@@ -618,6 +618,11 @@ services:
       - "8069:8080"   # pick any free port
     volumes:
       - sddb-data:/data
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-}
 
 volumes:
   sddb-data:
