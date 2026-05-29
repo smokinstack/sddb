@@ -1,4 +1,4 @@
-sddbdash.site {
+sddb.site {
     tls internal
     reverse_proxy dashboard:8080
 }

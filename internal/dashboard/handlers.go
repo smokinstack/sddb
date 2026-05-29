@@ -11,9 +11,11 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/smokinstack/sddb/internal/ai"
@@ -31,9 +33,11 @@ type Dashboard struct {
 	webFS     fs.FS
 	agentPort int
 	tlsConfig *tls.Config // nil = plain HTTP to agents
+	credsMu   sync.RWMutex
 	creds     *auth.Credentials
 	sessions  *auth.Sessions
 	limiter   *loginLimiter
+	dataDir   string
 	ai        *ai.Client
 	cfg       *config.Store
 }
@@ -42,8 +46,9 @@ type Dashboard struct {
 type Config struct {
 	AgentPort int
 	TLS       *tls.Config       // nil = plain HTTP to agents
-	Creds     *auth.Credentials // nil = no login required
+	Creds     *auth.Credentials // nil = setup required
 	Sessions  *auth.Sessions
+	DataDir   string
 	AI        *ai.Client
 	Cfg       *config.Store
 }
@@ -63,6 +68,7 @@ func NewDashboard(state *State, poller *Poller, notify chan struct{}, webFS fs.F
 		tlsConfig: cfg.TLS,
 		creds:     cfg.Creds,
 		sessions:  cfg.Sessions,
+		dataDir:   cfg.DataDir,
 		ai:        cfg.AI,
 		cfg:       cfg.Cfg,
 	}
@@ -76,8 +82,9 @@ func (d *Dashboard) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/login", d.handleLogin)
 	mux.HandleFunc("/logout", d.handleLogout)
+	mux.HandleFunc("/setup", d.handleSetup)
 
-	// Static assets — served without auth so browsers can fetch favicon etc.
+	// Static assets pass through auth so the setup/login pages can load CSS.
 	staticFS, err := fs.Sub(d.webFS, "static")
 	if err == nil {
 		mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticFS))))
@@ -97,23 +104,51 @@ func (d *Dashboard) Handler() http.Handler {
 	mux.HandleFunc("/api/ntfy/test", d.handleNtfyTest)
 	mux.HandleFunc("/events", d.handleSSE)
 
-	if d.creds != nil {
-		return d.requireAuth(mux)
-	}
-	return mux
+	return d.requireAuth(mux)
+}
+
+func isSecure(r *http.Request) bool {
+	return r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
 }
 
 // requireAuth wraps the mux with session-cookie authentication.
+// If no admin is configured it redirects everything to /setup.
 func (d *Dashboard) requireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Static assets are always allowed.
+		if strings.HasPrefix(r.URL.Path, "/static/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		d.credsMu.RLock()
+		creds := d.creds
+		sessions := d.sessions
+		d.credsMu.RUnlock()
+
+		// No admin set — redirect everything to /setup.
+		if creds == nil {
+			if r.URL.Path != "/setup" {
+				http.Redirect(w, r, "/setup", http.StatusSeeOther)
+				return
+			}
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// Admin exists — /setup and /login pass through.
+		if r.URL.Path == "/setup" {
+			http.Redirect(w, r, "/login", http.StatusSeeOther)
+			return
+		}
 		if r.URL.Path == "/login" {
 			next.ServeHTTP(w, r)
 			return
 		}
+
 		cookie, err := r.Cookie(auth.SessionCookie)
-		if err != nil || !d.sessions.Valid(cookie.Value) {
+		if err != nil || !sessions.Valid(cookie.Value) {
 			if r.Header.Get("HX-Request") == "true" {
-				// Tell HTMX to do a full page redirect rather than swap the login HTML into a panel
 				w.Header().Set("HX-Redirect", "/login")
 				w.WriteHeader(http.StatusUnauthorized)
 				return
@@ -125,35 +160,72 @@ func (d *Dashboard) requireAuth(next http.Handler) http.Handler {
 	})
 }
 
+func (d *Dashboard) handleSetup(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost {
+		username := r.FormValue("username")
+		password := r.FormValue("password")
+		confirm := r.FormValue("confirm")
+		if password != confirm {
+			d.tmpl.ExecuteTemplate(w, "setup.html", map[string]string{"Error": "Passwords do not match"})
+			return
+		}
+		adminPath := filepath.Join(d.dataDir, "admin.json")
+		if err := auth.SetAdmin(adminPath, username, password); err != nil {
+			d.tmpl.ExecuteTemplate(w, "setup.html", map[string]string{"Error": err.Error()})
+			return
+		}
+		creds, err := auth.Load(adminPath)
+		if err != nil || creds == nil {
+			d.tmpl.ExecuteTemplate(w, "setup.html", map[string]string{"Error": "Failed to load credentials"})
+			return
+		}
+		d.credsMu.Lock()
+		d.creds = creds
+		d.sessions = auth.NewSessions()
+		d.limiter = newLoginLimiter()
+		d.credsMu.Unlock()
+		log.Printf("admin account '%s' created via web setup", username)
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
+	d.tmpl.ExecuteTemplate(w, "setup.html", nil)
+}
+
 func (d *Dashboard) handleLogin(w http.ResponseWriter, r *http.Request) {
+	d.credsMu.RLock()
+	creds := d.creds
+	sessions := d.sessions
+	limiter := d.limiter
+	d.credsMu.RUnlock()
+
 	if r.Method == http.MethodPost {
 		ip := clientIP(r)
-		if d.limiter != nil && !d.limiter.allowed(ip) {
+		if limiter != nil && !limiter.allowed(ip) {
 			w.WriteHeader(http.StatusTooManyRequests)
 			d.tmpl.ExecuteTemplate(w, "login.html", map[string]string{"Error": "Too many failed attempts — try again later"})
 			return
 		}
 		username := r.FormValue("username")
 		password := r.FormValue("password")
-		if auth.Verify(d.creds, username, password) {
-			if d.limiter != nil {
-				d.limiter.recordSuccess(ip)
+		if auth.Verify(creds, username, password) {
+			if limiter != nil {
+				limiter.recordSuccess(ip)
 			}
-			token := d.sessions.Create()
+			token := sessions.Create()
 			http.SetCookie(w, &http.Cookie{
 				Name:     auth.SessionCookie,
 				Value:    token,
 				Path:     "/",
 				HttpOnly: true,
-				Secure:   true,
+				Secure:   isSecure(r),
 				SameSite: http.SameSiteStrictMode,
 				MaxAge:   int(24 * time.Hour / time.Second),
 			})
 			http.Redirect(w, r, "/", http.StatusSeeOther)
 			return
 		}
-		if d.limiter != nil {
-			d.limiter.recordFailure(ip)
+		if limiter != nil {
+			limiter.recordFailure(ip)
 		}
 		w.WriteHeader(http.StatusUnauthorized)
 		d.tmpl.ExecuteTemplate(w, "login.html", map[string]string{"Error": "Invalid username or password"})
@@ -163,15 +235,20 @@ func (d *Dashboard) handleLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d *Dashboard) handleLogout(w http.ResponseWriter, r *http.Request) {
-	if cookie, err := r.Cookie(auth.SessionCookie); err == nil {
-		d.sessions.Delete(cookie.Value)
+	d.credsMu.RLock()
+	sessions := d.sessions
+	d.credsMu.RUnlock()
+	if sessions != nil {
+		if cookie, err := r.Cookie(auth.SessionCookie); err == nil {
+			sessions.Delete(cookie.Value)
+		}
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     auth.SessionCookie,
 		Value:    "",
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   true,
+		Secure:   isSecure(r),
 		SameSite: http.SameSiteStrictMode,
 		MaxAge:   -1,
 	})
@@ -184,9 +261,12 @@ func (d *Dashboard) handleIndex(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	d.credsMu.RLock()
+	authEnabled := d.creds != nil
+	d.credsMu.RUnlock()
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	d.tmpl.ExecuteTemplate(w, "index.html", map[string]bool{
-		"AuthEnabled": d.creds != nil,
+		"AuthEnabled": authEnabled,
 	})
 }
 

@@ -70,6 +70,8 @@ Binaries are written to `bin/sddb-agent` and `bin/sddb-dashboard`.
 
 The easiest way to run the dashboard is with Docker Compose. Caddy is included and handles HTTPS automatically.
 
+> **Already running a reverse proxy?** If you have Nginx Proxy Manager, Traefik, or another proxy already occupying port 443 on the host, skip Caddy and use that instead — see [Using an existing reverse proxy](#using-an-existing-reverse-proxy).
+
 ### Prerequisites
 
 - Docker with the Compose plugin (`docker compose version` to verify)
@@ -598,6 +600,41 @@ deploy/
   sddb-agent.service
   sddb-dashboard.service
 ```
+
+---
+
+## Using an existing reverse proxy
+
+If you already have Nginx Proxy Manager, Traefik, or any other reverse proxy running on your server, it will already own port 443. Adding Caddy to the mix causes a port conflict — only one process can bind port 443.
+
+In this case, remove Caddy from the compose file and expose the dashboard directly on a host port:
+
+```yaml
+services:
+  dashboard:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8069:8080"   # pick any free port
+    volumes:
+      - sddb-data:/data
+
+volumes:
+  sddb-data:
+```
+
+Then point your existing proxy at `<host-ip>:8069`.
+
+**Nginx Proxy Manager:** Hosts → Add Proxy Host
+- Domain: `sddb.example.com`
+- Scheme: `http`
+- Forward Hostname/IP: your server IP
+- Forward Port: `8069`
+- SSL tab: enable and request a Let's Encrypt certificate
+
+**Traefik:** add the standard labels to the dashboard service in your compose file.
+
+The dashboard works over plain HTTP on the internal port — your reverse proxy handles TLS termination. Login works correctly because the session cookie detects HTTPS via the `X-Forwarded-Proto` header that NPM and Traefik both set automatically.
 
 ---
 

@@ -2,6 +2,8 @@ services:
   dashboard:
     build: .
     restart: unless-stopped
+    ports:
+      - "8069:8080"
     volumes:
       - sddb-data:/data
     environment:
@@ -10,22 +12,5 @@ services:
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-}
       - OLLAMA_MODEL=${OLLAMA_MODEL:-}
 
-  caddy:
-    image: caddy:2-alpine
-    restart: unless-stopped
-    ports:
-      - "443:443"
-      - "443:443/udp"
-    environment:
-      - SDDB_DOMAIN=${SDDB_DOMAIN}
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy-data:/data
-      - caddy-config:/config
-    depends_on:
-      - dashboard
-
 volumes:
   sddb-data:
-  caddy-data:
-  caddy-config:

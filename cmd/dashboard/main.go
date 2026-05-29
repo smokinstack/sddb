@@ -32,6 +32,9 @@ func main() {
 		case "set-admin":
 			runSetAdmin(os.Args[2:])
 			return
+		case "reset-admin":
+			runResetAdmin(os.Args[2:])
+			return
 		case "enroll":
 			runEnroll(os.Args[2:])
 			return
@@ -76,6 +79,50 @@ func runSetAdmin(args []string) {
 	}
 	fmt.Printf("\nAdmin account '%s' saved to %s\n", username, adminPath)
 	fmt.Println("The dashboard will require login on next start.")
+}
+
+// ── reset-admin ───────────────────────────────────────────────────────────────
+
+func runResetAdmin(args []string) {
+	fs := flag.NewFlagSet("reset-admin", flag.ExitOnError)
+	dataDir := fs.String("data-dir", defaultDataDir(), "data directory")
+	fs.Parse(args)
+
+	adminPath := filepath.Join(*dataDir, "admin.json")
+	if _, err := os.Stat(adminPath); os.IsNotExist(err) {
+		fmt.Fprintln(os.Stderr, "no admin account found — run 'set-admin' to create one")
+		os.Exit(1)
+	}
+
+	fmt.Print("New username (leave blank to keep existing): ")
+	var username string
+	fmt.Scanln(&username)
+
+	// Load existing to fall back on current username if blank
+	existing, err := auth.Load(adminPath)
+	if err != nil {
+		log.Fatalf("load existing credentials: %v", err)
+	}
+	if username == "" && existing != nil {
+		username = existing.Username
+	}
+	if username == "" {
+		fmt.Fprintln(os.Stderr, "username cannot be empty")
+		os.Exit(1)
+	}
+
+	password := readPassword("New password: ")
+	confirm := readPassword("Confirm password: ")
+	if password != confirm {
+		fmt.Fprintln(os.Stderr, "passwords do not match")
+		os.Exit(1)
+	}
+
+	if err := auth.SetAdmin(adminPath, username, password); err != nil {
+		log.Fatalf("reset admin: %v", err)
+	}
+	fmt.Printf("\nCredentials reset for '%s'.\n", username)
+	fmt.Println("Restart the dashboard to apply.")
 }
 
 func readPassword(prompt string) string {
@@ -209,6 +256,7 @@ func runDashboard() {
 
 	dashCfg := dashboard.Config{
 		AgentPort: *agentPort,
+		DataDir:   *dataDir,
 		Creds:     creds,
 		Sessions:  sessions,
 		AI:        aiClient,
@@ -314,9 +362,10 @@ func printUsage() {
 	fmt.Println(`sddb-dashboard — container dashboard server
 
 Usage:
-  sddb-dashboard [flags]            start the dashboard
-  sddb-dashboard set-admin [flags]  create or update the admin account
-  sddb-dashboard enroll <name>      issue an mTLS certificate for an agent
+  sddb-dashboard [flags]              start the dashboard
+  sddb-dashboard set-admin [flags]    create or update the admin account
+  sddb-dashboard reset-admin [flags]  reset the admin password
+  sddb-dashboard enroll <name>        issue an mTLS certificate for an agent
 
 Dashboard flags:
   -addr        listen address (default :8080)
