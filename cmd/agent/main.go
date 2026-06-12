@@ -44,28 +44,27 @@ func main() {
 		UpdateInterval: *interval,
 	}
 
-	if *tlsCert != "" || *tlsKey != "" || *tlsCA != "" {
-		if *tlsCert == "" || *tlsKey == "" || *tlsCA == "" {
-			log.Fatal("all three TLS flags must be provided together: -tls-cert, -tls-key, -tls-ca")
-		}
-		certPEM, err := os.ReadFile(*tlsCert)
-		if err != nil {
-			log.Fatalf("read tls-cert: %v", err)
-		}
-		keyPEM, err := os.ReadFile(*tlsKey)
-		if err != nil {
-			log.Fatalf("read tls-key: %v", err)
-		}
-		caPEM, err := os.ReadFile(*tlsCA)
-		if err != nil {
-			log.Fatalf("read tls-ca: %v", err)
-		}
-		tlsCfg, err := pki.AgentServerTLS(certPEM, keyPEM, caPEM)
-		if err != nil {
-			log.Fatalf("tls config: %v", err)
-		}
-		cfg.TLS = tlsCfg
+	if *tlsCert == "" || *tlsKey == "" || *tlsCA == "" {
+		log.Fatal("mTLS is required: provide -tls-cert, -tls-key, and -tls-ca\n" +
+			"Run 'sddb-dashboard enroll <name>' on the dashboard host to generate certificates.")
 	}
+	certPEM, err := os.ReadFile(*tlsCert)
+	if err != nil {
+		log.Fatalf("read tls-cert: %v", err)
+	}
+	keyPEM, err := os.ReadFile(*tlsKey)
+	if err != nil {
+		log.Fatalf("read tls-key: %v", err)
+	}
+	caPEM, err := os.ReadFile(*tlsCA)
+	if err != nil {
+		log.Fatalf("read tls-ca: %v", err)
+	}
+	tlsCfg, err := pki.AgentServerTLS(certPEM, keyPEM, caPEM)
+	if err != nil {
+		log.Fatalf("tls config: %v", err)
+	}
+	cfg.TLS = tlsCfg
 
 	a := agent.New(cfg, docker)
 

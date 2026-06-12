@@ -28,8 +28,8 @@ Communication between the dashboard and agents is secured with mutual TLS (mTLS)
 - **AI analysis** — send logs or a health prompt to Claude, ChatGPT, or a local Ollama model for instant analysis
 - **Notifications** — ntfy push alerts on crash, OOM kill, or restart loop; master on/off toggle plus per-host mute; automatic crash-loop suppression and recovery notification
 - **Settings** — choose AI provider; configure ntfy URL; toggle visibility of stopped containers
-- **Admin authentication** — optional login; unprotected by default until you run `set-admin`
-- **mTLS security** — all agent communication is certificate-authenticated
+- **Admin authentication** — login required; dashboard refuses to start without a configured admin account
+- **mTLS security** — all agent↔dashboard communication is certificate-authenticated; agents refuse to start without TLS certificates
 - **Systemd service files** — included for both components
 
 ---
@@ -111,7 +111,10 @@ cp .env.example .env
 
 # 3. Update the Caddyfile for your setup (see below)
 
-# 4. Start everything
+# 4. Create the admin account (required before first start)
+docker compose run --rm dashboard set-admin -data-dir /data
+
+# 5. Start everything
 docker compose up -d
 ```
 
@@ -133,14 +136,6 @@ sddb.home {
 Replace `sddb.home` with whatever hostname you chose. On first start with `tls internal`, Caddy generates a local CA and issues a certificate — you'll see a browser warning until you import the CA cert (see [Trusting the local CA](#trusting-the-local-ca)).
 
 The dashboard will be available at `https://<your-hostname>`.
-
-### Set an admin password
-
-On first visit the dashboard redirects to a setup page where you create the admin account in the browser. Alternatively, run the CLI:
-
-```bash
-docker compose run --rm dashboard set-admin -data-dir /data
-```
 
 ### Enroll agents
 
@@ -221,13 +216,13 @@ sudo systemctl daemon-reload
 
 Data (PKI, config, agent list) is stored in `/var/lib/sddb`.
 
-**Set an admin password** (optional but recommended):
+**Create the admin account** (required before starting the dashboard):
 
 ```bash
 sudo sddb-dashboard set-admin -data-dir /var/lib/sddb
 ```
 
-You will be prompted for a username and password. If you skip this step, the dashboard will redirect to a web-based setup page on first visit where you can create the account in the browser instead.
+You will be prompted for a username and password. The dashboard will not start without a configured admin account.
 
 **Start the service:**
 
@@ -344,7 +339,22 @@ The AI response is shown in a modal. No data is stored or logged — each reques
 
 ### Configuring providers
 
-Set environment variables on the dashboard host before starting the service. The easiest way is via a systemd override:
+**Docker install** — add to your `.env` file in the `sddb` directory:
+
+```bash
+OPENAI_API_KEY=sk-...
+ANTHROPIC_API_KEY=sk-ant-...
+OLLAMA_BASE_URL=http://192.168.1.50:11434
+OLLAMA_MODEL=llama3.2
+```
+
+Then restart:
+
+```bash
+docker compose up -d --force-recreate dashboard
+```
+
+**Binary install** — set via a systemd override:
 
 ```bash
 sudo systemctl edit sddb-dashboard
@@ -583,9 +593,9 @@ sddb-dashboard enroll <name>     issue an mTLS certificate for an agent
 |---|---|---|
 | `-addr` | `:8484` | Listen address |
 | `-interval` | `5s` | Docker stats refresh interval |
-| `-tls-cert` | — | Path to agent TLS certificate |
-| `-tls-key` | — | Path to agent TLS private key |
-| `-tls-ca` | — | Path to CA cert (verifies the dashboard) |
+| `-tls-cert` | **required** | Path to agent TLS certificate |
+| `-tls-key` | **required** | Path to agent TLS private key |
+| `-tls-ca` | **required** | Path to CA cert (verifies the dashboard) |
 
 ---
 
@@ -736,8 +746,9 @@ The session cookie's `Secure` flag is set automatically based on whether the req
 
 ## Security notes
 
-- Without `set-admin` the dashboard has **no authentication**. Anyone on your network can access it. Set a password before exposing it outside a trusted LAN.
-- The login endpoint rate-limits by IP: **5 failed attempts within 15 minutes** triggers a 15-minute lockout. The counter resets on a successful login.
+- The dashboard **will not start** without a configured admin account. Run `set-admin` before the first launch.
+- The agent **will not start** without TLS certificates. Run `enroll` on the dashboard host and copy the resulting cert files to each agent host before starting the agent service.
+- The login endpoint rate-limits by IP: **5 failed attempts within 15 minutes** triggers a 15-minute lockout. The counter resets on a successful login. Forwarded headers (`X-Forwarded-For`) are only trusted when the connection comes from loopback — direct connections always use the real remote IP.
 - The session cookie is `HttpOnly`, `Secure`, and `SameSite=Strict`. The `Secure` flag means the cookie is only sent over HTTPS — use Caddy (or another TLS proxy) when exposing the dashboard publicly.
 - mTLS ensures only agents with certificates signed by your CA can communicate with the dashboard. Each agent host must be enrolled separately.
 - AI provider API keys are stored only as environment variables — never written to disk or exposed in the UI.

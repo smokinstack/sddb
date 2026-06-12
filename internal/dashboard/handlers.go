@@ -11,7 +11,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
-	"path/filepath"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -46,7 +46,7 @@ type Dashboard struct {
 type Config struct {
 	AgentPort int
 	TLS       *tls.Config       // nil = plain HTTP to agents
-	Creds     *auth.Credentials // nil = setup required
+	Creds     *auth.Credentials // required; dashboard refuses to start without it
 	Sessions  *auth.Sessions
 	DataDir   string
 	AI        *ai.Client
@@ -72,9 +72,7 @@ func NewDashboard(state *State, poller *Poller, notify chan struct{}, webFS fs.F
 		ai:        cfg.AI,
 		cfg:       cfg.Cfg,
 	}
-	if cfg.Creds != nil {
-		d.limiter = newLoginLimiter()
-	}
+	d.limiter = newLoginLimiter()
 	return d, nil
 }
 
@@ -82,9 +80,8 @@ func (d *Dashboard) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/login", d.handleLogin)
 	mux.HandleFunc("/logout", d.handleLogout)
-	mux.HandleFunc("/setup", d.handleSetup)
 
-	// Static assets pass through auth so the setup/login pages can load CSS.
+	// Static assets pass through auth so the login page can load CSS.
 	staticFS, err := fs.Sub(d.webFS, "static")
 	if err == nil {
 		mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticFS))))
@@ -112,7 +109,6 @@ func isSecure(r *http.Request) bool {
 }
 
 // requireAuth wraps the mux with session-cookie authentication.
-// If no admin is configured it redirects everything to /setup.
 func (d *Dashboard) requireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Static assets are always allowed.
@@ -122,25 +118,9 @@ func (d *Dashboard) requireAuth(next http.Handler) http.Handler {
 		}
 
 		d.credsMu.RLock()
-		creds := d.creds
 		sessions := d.sessions
 		d.credsMu.RUnlock()
 
-		// No admin set — redirect everything to /setup.
-		if creds == nil {
-			if r.URL.Path != "/setup" {
-				http.Redirect(w, r, "/setup", http.StatusSeeOther)
-				return
-			}
-			next.ServeHTTP(w, r)
-			return
-		}
-
-		// Admin exists — /setup and /login pass through.
-		if r.URL.Path == "/setup" {
-			http.Redirect(w, r, "/login", http.StatusSeeOther)
-			return
-		}
 		if r.URL.Path == "/login" {
 			next.ServeHTTP(w, r)
 			return
@@ -160,36 +140,6 @@ func (d *Dashboard) requireAuth(next http.Handler) http.Handler {
 	})
 }
 
-func (d *Dashboard) handleSetup(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodPost {
-		username := r.FormValue("username")
-		password := r.FormValue("password")
-		confirm := r.FormValue("confirm")
-		if password != confirm {
-			d.tmpl.ExecuteTemplate(w, "setup.html", map[string]string{"Error": "Passwords do not match"})
-			return
-		}
-		adminPath := filepath.Join(d.dataDir, "admin.json")
-		if err := auth.SetAdmin(adminPath, username, password); err != nil {
-			d.tmpl.ExecuteTemplate(w, "setup.html", map[string]string{"Error": err.Error()})
-			return
-		}
-		creds, err := auth.Load(adminPath)
-		if err != nil || creds == nil {
-			d.tmpl.ExecuteTemplate(w, "setup.html", map[string]string{"Error": "Failed to load credentials"})
-			return
-		}
-		d.credsMu.Lock()
-		d.creds = creds
-		d.sessions = auth.NewSessions()
-		d.limiter = newLoginLimiter()
-		d.credsMu.Unlock()
-		log.Printf("admin account '%s' created via web setup", username)
-		http.Redirect(w, r, "/login", http.StatusSeeOther)
-		return
-	}
-	d.tmpl.ExecuteTemplate(w, "setup.html", nil)
-}
 
 func (d *Dashboard) handleLogin(w http.ResponseWriter, r *http.Request) {
 	d.credsMu.RLock()
@@ -299,6 +249,12 @@ func (d *Dashboard) handleLogs(w http.ResponseWriter, r *http.Request) {
 		tail = "100"
 	}
 
+	// Validate agent address is a registered agent to prevent SSRF.
+	if _, ok := d.state.findByAddr(agentAddr); !ok {
+		http.Error(w, "unknown agent", http.StatusBadRequest)
+		return
+	}
+
 	scheme := "http"
 	var transport http.RoundTripper
 	if d.tlsConfig != nil {
@@ -331,6 +287,12 @@ func (d *Dashboard) handleNtfyTest(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "url required", http.StatusBadRequest)
 		return
 	}
+	parsed, err := url.Parse(req.URL)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		http.Error(w, "ntfy URL must use http or https", http.StatusBadRequest)
+		return
+	}
+
 	httpReq, err := http.NewRequestWithContext(r.Context(), http.MethodPost, req.URL,
 		strings.NewReader("SDDB test notification — alerts are working."))
 	if err != nil {

@@ -1,5 +1,8 @@
 # binaries
 bin/
+/dashboard
+/sddb-agent
+/sddb-dashboard
 
 # generated cert files
 certs/

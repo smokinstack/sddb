@@ -89,15 +89,19 @@ func (l *loginLimiter) reapLoop() {
 }
 
 func clientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		if i := strings.Index(xff, ","); i != -1 {
-			return strings.TrimSpace(xff[:i])
+	remoteIP, _, _ := net.SplitHostPort(r.RemoteAddr)
+	// Only trust forwarded headers when the direct connection is from loopback
+	// (i.e. a reverse proxy like Caddy running on the same host).
+	if parsed := net.ParseIP(remoteIP); parsed != nil && parsed.IsLoopback() {
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			if i := strings.Index(xff, ","); i != -1 {
+				return strings.TrimSpace(xff[:i])
+			}
+			return strings.TrimSpace(xff)
 		}
-		return strings.TrimSpace(xff)
+		if xri := r.Header.Get("X-Real-IP"); xri != "" {
+			return xri
+		}
 	}
-	if xri := r.Header.Get("X-Real-IP"); xri != "" {
-		return xri
-	}
-	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
-	return ip
+	return remoteIP
 }

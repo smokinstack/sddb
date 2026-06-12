@@ -224,13 +224,11 @@ func runDashboard() {
 	if err != nil {
 		log.Fatalf("load admin credentials: %v", err)
 	}
-	var sessions *auth.Sessions
-	if creds != nil {
-		sessions = auth.NewSessions()
-		log.Printf("admin login enabled for user '%s'", creds.Username)
-	} else {
-		log.Println("WARNING: no admin account set — dashboard is unprotected. Run 'sddb-dashboard set-admin' to secure it.")
+	if creds == nil {
+		log.Fatalf("no admin account configured — run 'sddb-dashboard set-admin' to create one")
 	}
+	sessions := auth.NewSessions()
+	log.Printf("admin login enabled for user '%s'", creds.Username)
 
 	// ── PKI / TLS ─────────────────────────────────────────────────────────────
 	var clientTLS *pki.CA
