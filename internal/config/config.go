@@ -9,11 +9,12 @@ import (
 
 // Config holds all user-configurable dashboard settings.
 type Config struct {
-	AIProvider        string          `json:"ai_provider"`         // "", "claude", "openai", "ollama"
-	AutoUpdate        map[string]bool `json:"auto_update"`         // "agentAddr::containerName" → enabled
-	NtfyURL           string          `json:"ntfy_url"`            // full topic URL, e.g. https://ntfy.sh/my-alerts
-	NtfyDisabled      bool            `json:"ntfy_disabled"`       // master kill-switch; false = enabled
-	NtfyDisabledHosts map[string]bool `json:"ntfy_disabled_hosts"` // agentAddr → true means muted
+	AIProvider         string          `json:"ai_provider"`          // "", "claude", "openai", "ollama"
+	AutoUpdate         map[string]bool `json:"auto_update"`          // "agentAddr::containerName" → enabled
+	NtfyURL            string          `json:"ntfy_url"`             // full topic URL, e.g. https://ntfy.sh/my-alerts
+	NtfyDisabled       bool            `json:"ntfy_disabled"`        // master kill-switch; false = enabled
+	NtfyDisabledHosts  map[string]bool `json:"ntfy_disabled_hosts"`  // agentAddr → true means muted
+	ProtectedContainers []string       `json:"protected_containers"` // names exempt from start/stop/restart/upgrade
 }
 
 // Store is a thread-safe config loader/saver backed by a JSON file.

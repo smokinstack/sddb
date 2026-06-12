@@ -634,7 +634,7 @@ services:
     build: .
     restart: unless-stopped
     ports:
-      - "8069:8080"   # pick any free port
+      - "127.0.0.1:8069:8080"   # loopback only — your proxy reaches it, the network doesn't
     volumes:
       - sddb-data:/data
     environment:
@@ -647,7 +647,7 @@ volumes:
   sddb-data:
 ```
 
-Then point your existing proxy at `<host-ip>:8069`.
+Then point your existing proxy at `127.0.0.1:8069`.
 
 **Nginx Proxy Manager:** Hosts → Add Proxy Host
 - Domain: `sddb.example.com`
@@ -752,5 +752,7 @@ The session cookie's `Secure` flag is set automatically based on whether the req
 - The session cookie is `HttpOnly`, `Secure`, and `SameSite=Strict`. The `Secure` flag means the cookie is only sent over HTTPS — use Caddy (or another TLS proxy) when exposing the dashboard publicly.
 - mTLS ensures only agents with certificates signed by your CA can communicate with the dashboard. Each agent host must be enrolled separately.
 - AI provider API keys are stored only as environment variables — never written to disk or exposed in the UI.
+- The ntfy topic URL is stored in `config.json` (mode `0600`). The topic name acts as a shared secret — use a long, random, hard-to-guess name.
 - `/var/lib/sddb` is created with mode `0700`. The config file is written with mode `0600`.
 - The agent service runs as a dedicated `sddb` user (member of the `docker` group) with `NoNewPrivileges` and a read-only filesystem outside `/etc/sddb`.
+- **Protected containers**: add container names to `protected_containers` in `config.json` to prevent them from being stopped, restarted, or upgraded via the dashboard. Useful for guarding infrastructure containers (e.g. your reverse proxy or the dashboard itself) against accidental or unauthorised actions.
