@@ -126,9 +126,9 @@ func hostsInCIDR(cidr string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	ones, _ := ipnet.Mask.Size()
-	if ones < 16 {
-		return nil, fmt.Errorf("CIDR /%d is too large to scan; maximum prefix length is /16", ones)
+	ones, totalBits := ipnet.Mask.Size()
+	if totalBits-ones > 16 {
+		return nil, fmt.Errorf("CIDR range too large to scan (max ~65536 addresses)")
 	}
 
 	var ips []string

@@ -80,7 +80,10 @@ func (d *DockerClient) CollectAll(ctx context.Context) ([]types.ContainerState, 
 }
 
 func (d *DockerClient) containerState(ctx context.Context, c dockertypes.Container) (types.ContainerState, error) {
-	name := strings.TrimPrefix(c.Names[0], "/")
+	var name string
+	if len(c.Names) > 0 {
+		name = strings.TrimPrefix(c.Names[0], "/")
+	}
 
 	state := types.ContainerState{
 		ID:      c.ID,
