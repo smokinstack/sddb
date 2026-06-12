@@ -622,19 +622,22 @@ func (d *Dashboard) handleCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Reject commands targeting a protected container.
-	var containerName string
-	for _, c := range agent.LastStats.Containers {
-		if c.ID == req.ContainerID || c.ShortID == req.ContainerID {
-			containerName = c.Name
+	// Resolve container ID to a known container; fail closed if not found.
+	var match *types.ContainerState
+	for i := range agent.LastStats.Containers {
+		c := &agent.LastStats.Containers[i]
+		if c.ID == req.ContainerID || c.ShortID == req.ContainerID || c.Name == req.ContainerID {
+			match = c
 			break
 		}
 	}
-	for _, p := range d.cfg.Get().ProtectedContainers {
-		if p == containerName {
-			http.Error(w, "container is protected", http.StatusForbidden)
-			return
-		}
+	if match == nil {
+		http.Error(w, "unknown container", http.StatusBadRequest)
+		return
+	}
+	if d.cfg.IsProtected(match.Name) {
+		http.Error(w, "container is protected", http.StatusForbidden)
+		return
 	}
 
 	scheme := "http"

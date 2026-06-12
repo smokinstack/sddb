@@ -69,6 +69,17 @@ func (s *Store) IsAutoUpdate(agentAddr, containerName string) bool {
 	return s.cfg.AutoUpdate[agentAddr+"::"+containerName]
 }
 
+func (s *Store) IsProtected(name string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, p := range s.cfg.ProtectedContainers {
+		if p == name {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Store) save() error {
 	data, err := json.MarshalIndent(s.cfg, "", "  ")
 	if err != nil {

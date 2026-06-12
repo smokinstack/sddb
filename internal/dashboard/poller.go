@@ -102,6 +102,9 @@ func (p *Poller) runAutoUpdates(addr string, containers []types.ContainerState) 
 		if !c.UpdateAvailable || c.State != "running" {
 			continue
 		}
+		if p.cfg.IsProtected(c.Name) {
+			continue
+		}
 		if !p.cfg.IsAutoUpdate(addr, c.Name) {
 			continue
 		}
