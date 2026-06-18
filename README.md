@@ -139,11 +139,23 @@ The dashboard will be available at `https://<your-hostname>`.
 
 ### Enroll agents
 
+> **Each agent needs its own enrollment.** Run `enroll` once per agent host using a unique label. Do not copy the same certificate files to multiple agents.
+
 ```bash
-docker compose run --rm dashboard enroll <hostname> -data-dir /data -out /data/certs
+docker compose run --rm dashboard enroll <label> -data-dir /data -out /data/certs
 ```
 
-This creates the CA (if it doesn't exist yet) and writes three cert files into the `sddb-data` volume under `/data/certs/`. **Restart the dashboard after the first enroll** so it picks up the new CA and activates mTLS:
+Replace `<label>` with a short name for the agent host (e.g. `homeserver`, `nas`). This creates the CA (if it doesn't exist yet) and writes three cert files into the `sddb-data` volume under `/data/certs/`.
+
+**`/data/certs` is inside the container** — it maps to the `sddb-data` Docker volume. To find the files on the host:
+
+```bash
+VOL=$(docker volume inspect sddb_sddb-data --format '{{ .Mountpoint }}')
+ls $VOL/certs/
+# → <label>-agent.crt  <label>-agent.key  <label>-ca.crt
+```
+
+**Restart the dashboard after the first enroll** so it picks up the new CA and activates mTLS:
 
 ```bash
 docker compose restart dashboard
@@ -151,21 +163,21 @@ docker compose restart dashboard
 
 The dashboard log will confirm: `mTLS enabled — agents must present a certificate signed by the dashboard CA`.
 
-Find the cert files on the host and copy them to the agent:
+Copy the cert files to the agent host:
 
 ```bash
 VOL=$(docker volume inspect sddb_sddb-data --format '{{ .Mountpoint }}')
 
 # Agent on a remote host
-scp $VOL/certs/<hostname>-agent.crt user@<agent-host>:/tmp/agent.crt
-scp $VOL/certs/<hostname>-agent.key user@<agent-host>:/tmp/agent.key
-scp $VOL/certs/<hostname>-ca.crt    user@<agent-host>:/tmp/ca.crt
+scp $VOL/certs/<label>-agent.crt user@<agent-host>:/tmp/agent.crt
+scp $VOL/certs/<label>-agent.key user@<agent-host>:/tmp/agent.key
+scp $VOL/certs/<label>-ca.crt    user@<agent-host>:/tmp/ca.crt
 ssh user@<agent-host> "sudo mv /tmp/agent.crt /tmp/agent.key /tmp/ca.crt /etc/sddb/"
 
 # Agent on the same host as the dashboard
-sudo cp $VOL/certs/<hostname>-agent.crt /etc/sddb/agent.crt
-sudo cp $VOL/certs/<hostname>-agent.key /etc/sddb/agent.key
-sudo cp $VOL/certs/<hostname>-ca.crt    /etc/sddb/ca.crt
+sudo cp $VOL/certs/<label>-agent.crt /etc/sddb/agent.crt
+sudo cp $VOL/certs/<label>-agent.key /etc/sddb/agent.key
+sudo cp $VOL/certs/<label>-ca.crt    /etc/sddb/ca.crt
 ```
 
 The service unit expects the files named `agent.crt`, `agent.key`, and `ca.crt` — rename them on copy as shown above.
@@ -201,9 +213,13 @@ The dashboard can run on any machine that has network access to your agent hosts
 ```bash
 ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
 VERSION=$(curl -fsSL https://api.github.com/repos/smokinstack/sddb/releases/latest | grep '"tag_name"' | cut -d'"' -f4)
-curl -fsSL "https://github.com/smokinstack/sddb/releases/download/${VERSION}/sddb-dashboard_${VERSION}_linux_${ARCH}.tar.gz" \
+VERSION_NO_V=${VERSION#v}
+curl -fsSL "https://github.com/smokinstack/sddb/releases/download/${VERSION}/sddb-dashboard_${VERSION_NO_V}_linux_${ARCH}.tar.gz" \
   | tar xz -C /tmp
 sudo install -m755 /tmp/sddb-dashboard /usr/local/bin/
+
+# Verify the binary is installed and working
+sddb-dashboard -h
 ```
 
 **Install the systemd unit:**
@@ -240,11 +256,13 @@ Each machine you want to monitor needs the agent binary and a certificate issued
 
 #### Step 1 — Issue a certificate (run on the dashboard host)
 
+> **Each agent needs its own enrollment.** Run this once per agent host using a unique label. Do not copy the same certificate files to multiple agents.
+
 ```bash
-sudo sddb-dashboard enroll <hostname> -data-dir /var/lib/sddb -out /tmp/certs
+sudo sddb-dashboard enroll <label> -data-dir /var/lib/sddb -out /tmp/certs
 ```
 
-Replace `<hostname>` with a label for the machine (e.g. `plexmon`, `shadow`). Three files are created:
+Replace `<label>` with a short name for the machine (e.g. `plexmon`, `shadow`). Three files are created:
 
 | File | Purpose |
 |---|---|
@@ -269,9 +287,9 @@ sudo chmod 750 /etc/sddb
 Copy the cert files from the dashboard host, renaming them to the standard names the service unit expects:
 
 ```bash
-scp /tmp/certs/<hostname>-agent.crt user@<agent-host>:/tmp/agent.crt
-scp /tmp/certs/<hostname>-agent.key user@<agent-host>:/tmp/agent.key
-scp /tmp/certs/<hostname>-ca.crt    user@<agent-host>:/tmp/ca.crt
+scp /tmp/certs/<label>-agent.crt user@<agent-host>:/tmp/agent.crt
+scp /tmp/certs/<label>-agent.key user@<agent-host>:/tmp/agent.key
+scp /tmp/certs/<label>-ca.crt    user@<agent-host>:/tmp/ca.crt
 
 ssh user@<agent-host> "sudo mv /tmp/agent.crt /tmp/agent.key /tmp/ca.crt /etc/sddb/ \
   && sudo chown sddb:sddb /etc/sddb/* \
@@ -286,9 +304,13 @@ On the agent host:
 ```bash
 ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
 VERSION=$(curl -fsSL https://api.github.com/repos/smokinstack/sddb/releases/latest | grep '"tag_name"' | cut -d'"' -f4)
-curl -fsSL "https://github.com/smokinstack/sddb/releases/download/${VERSION}/sddb-agent_${VERSION}_linux_${ARCH}.tar.gz" \
+VERSION_NO_V=${VERSION#v}
+curl -fsSL "https://github.com/smokinstack/sddb/releases/download/${VERSION}/sddb-agent_${VERSION_NO_V}_linux_${ARCH}.tar.gz" \
   | tar xz -C /tmp
 sudo install -m755 /tmp/sddb-agent /usr/local/bin/
+
+# Verify the binary is installed and working
+sddb-agent -h
 ```
 
 #### Step 4 — Install and start the systemd unit
@@ -321,6 +343,46 @@ sudo systemctl restart sddb-dashboard
 ```bash
 sudo systemctl restart sddb-agent
 ```
+
+---
+
+## Monitoring the dashboard host itself
+
+A common first setup is to run both the dashboard and an agent on the same machine. Enroll a local agent certificate, then install and start the agent on the same host.
+
+**Docker install:**
+
+```bash
+# Enroll using the host's LAN IP as the label
+docker compose run --rm dashboard enroll $(hostname -I | awk '{print $1}') -data-dir /data -out /data/certs
+
+# Restart to activate mTLS
+docker compose restart dashboard
+
+# Copy certs to /etc/sddb on this host
+VOL=$(docker volume inspect sddb_sddb-data --format '{{ .Mountpoint }}')
+HOST_IP=$(hostname -I | awk '{print $1}')
+sudo mkdir -p /etc/sddb
+sudo cp $VOL/certs/${HOST_IP}-agent.crt /etc/sddb/agent.crt
+sudo cp $VOL/certs/${HOST_IP}-agent.key /etc/sddb/agent.key
+sudo cp $VOL/certs/${HOST_IP}-ca.crt    /etc/sddb/ca.crt
+```
+
+Then install the agent binary (see [Agent hosts](#agent-hosts)) and start the service. Add the agent in the dashboard UI at `<host-ip>:8484`.
+
+---
+
+## Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| `agent returned 400` | Wrong certificate for this dashboard CA | Re-enroll and copy fresh certs to the agent |
+| `agent returned 400` | Dashboard CA was regenerated (e.g. after `down -v`) | Re-enroll all agents; restart agent services |
+| `x509: certificate signed by unknown authority` | Agent has the wrong `ca.crt` | Copy `<label>-ca.crt` from the dashboard host |
+| `connection refused` | Agent not running | `sudo systemctl status sddb-agent`; check `journalctl -u sddb-agent` |
+| `203/EXEC` in systemd | Binary missing or not executable | Verify with `which sddb-agent && sddb-agent -h` |
+| Dashboard shows agent offline immediately | mTLS not activated on dashboard | Restart dashboard after first `enroll` |
+| Scan finds wrong subnet | Dashboard running in Docker sees Docker network | Enter your LAN CIDR manually (e.g. `192.168.0.0/24`) |
 
 ---
 
