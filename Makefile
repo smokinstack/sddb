@@ -1,6 +1,10 @@
-.PHONY: all agent dashboard build linux linux-arm64 release clean install install-agent-service install-dashboard-service install-service enroll
+.PHONY: all agent dashboard build linux linux-arm64 release clean install \
+        install-agent-service install-dashboard-service install-service enroll \
+        run-agent run-dashboard
 
-GOFLAGS   := -trimpath
+VERSION   ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+LDFLAGS   := -ldflags "-X main.version=$(VERSION)"
+GOFLAGS   := -trimpath $(LDFLAGS)
 AGENT_OUT := bin/sddb-agent
 DASH_OUT  := bin/sddb-dashboard
 
@@ -43,10 +47,10 @@ release:
 	GOOS=darwin GOARCH=arm64 go build $(GOFLAGS) -o $(AGENT_OUT)-darwin-arm64  ./cmd/agent
 	GOOS=darwin GOARCH=arm64 go build $(GOFLAGS) -o $(DASH_OUT)-darwin-arm64   ./cmd/dashboard
 
-# Install binaries to /usr/local/bin
+# Install binaries to /usr/local/bin (requires root)
 install: build
-	install -m 755 $(AGENT_OUT) /usr/local/bin/sddb-agent
-	install -m 755 $(DASH_OUT)  /usr/local/bin/sddb-dashboard
+	sudo install -m 755 $(AGENT_OUT) /usr/local/bin/sddb-agent
+	sudo install -m 755 $(DASH_OUT)  /usr/local/bin/sddb-dashboard
 
 clean:
 	rm -rf bin/
@@ -65,9 +69,13 @@ install-agent-service: agent
 	sudo systemctl daemon-reload
 	@echo ""
 	@echo "Agent service installed."
+	@echo ""
+	@echo "  ⚠ mTLS is disabled until you add TLS flags. The agent port (8484)"
+	@echo "    is open to your network without it."
+	@echo "    Run 'make enroll HOST=$(shell hostname)' from the dashboard host, then:"
+	@echo "    sudo systemctl edit sddb-agent"
+	@echo ""
 	@echo "  Start now:  sudo systemctl enable --now sddb-agent"
-	@echo "  Add mTLS:   sudo systemctl edit sddb-agent"
-	@echo "              (add -tls-cert/-tls-key/-tls-ca to ExecStart)"
 	@echo ""
 
 # Install dashboard as a systemd service. Data is stored in /var/lib/sddb.
@@ -94,24 +102,22 @@ install-service: install-agent-service install-dashboard-service
 #   - The sddb user already exists on HOST (created by deploy/install-agent.sh)
 enroll:
 	@test -n "$(HOST)" || (echo "Usage: make enroll HOST=<label> [SSH_USER=<user>]" && false)
-	$(eval ENROLL_TMP := $(shell mktemp -d))
-	@echo "==> Enrolling certificate for $(HOST) ..."
-	sudo sddb-dashboard enroll $(HOST) -data-dir $(DATA_DIR) -out $(ENROLL_TMP)
-	@echo "==> Pushing certificates to $(SSH_USER)@$(HOST) ..."
-	ssh $(SSH_USER)@$(HOST) "sudo mkdir -p /etc/sddb"
-	< $(ENROLL_TMP)/$(HOST)-agent.crt ssh $(SSH_USER)@$(HOST) "sudo tee /etc/sddb/agent.crt > /dev/null"
-	< $(ENROLL_TMP)/$(HOST)-agent.key ssh $(SSH_USER)@$(HOST) "sudo tee /etc/sddb/agent.key > /dev/null"
-	< $(ENROLL_TMP)/$(HOST)-ca.crt    ssh $(SSH_USER)@$(HOST) "sudo tee /etc/sddb/ca.crt    > /dev/null"
-	@echo "==> Setting ownership and permissions on $(HOST) ..."
-	ssh $(SSH_USER)@$(HOST) " \
-	  sudo chown sddb:sddb /etc/sddb/agent.crt /etc/sddb/agent.key /etc/sddb/ca.crt && \
-	  sudo chmod 640 /etc/sddb/agent.crt /etc/sddb/ca.crt && \
-	  sudo chmod 600 /etc/sddb/agent.key"
-	@rm -rf $(ENROLL_TMP)
-	@echo ""
-	@echo "Done. Certificate for '$(HOST)' is installed."
-	@echo "  If this is the first enrolled agent, restart the dashboard to activate mTLS:"
-	@echo "    sudo systemctl restart sddb-dashboard"
-	@echo "  Start the agent on $(HOST):"
-	@echo "    ssh $(SSH_USER)@$(HOST) 'sudo systemctl enable --now sddb-agent'"
-	@echo ""
+	@set -e; \
+	  ENROLL_TMP=$$(mktemp -d); \
+	  trap 'rm -rf "$$ENROLL_TMP"' EXIT; \
+	  echo "==> Enrolling certificate for $(HOST) ..."; \
+	  sudo sddb-dashboard enroll $(HOST) -data-dir $(DATA_DIR) -out $$ENROLL_TMP; \
+	  echo "==> Pushing certificates to $(SSH_USER)@$(HOST) ..."; \
+	  ssh $(SSH_USER)@$(HOST) "sudo mkdir -p /etc/sddb"; \
+	  ssh $(SSH_USER)@$(HOST) "sudo tee /etc/sddb/agent.crt > /dev/null" < $$ENROLL_TMP/$(HOST)-agent.crt; \
+	  ssh $(SSH_USER)@$(HOST) "sudo tee /etc/sddb/agent.key > /dev/null" < $$ENROLL_TMP/$(HOST)-agent.key; \
+	  ssh $(SSH_USER)@$(HOST) "sudo tee /etc/sddb/ca.crt    > /dev/null" < $$ENROLL_TMP/$(HOST)-ca.crt; \
+	  echo "==> Setting ownership and permissions on $(HOST) ..."; \
+	  ssh $(SSH_USER)@$(HOST) "sudo chown sddb:sddb /etc/sddb/agent.crt /etc/sddb/agent.key /etc/sddb/ca.crt && sudo chmod 640 /etc/sddb/agent.crt /etc/sddb/ca.crt && sudo chmod 600 /etc/sddb/agent.key"; \
+	  echo ""; \
+	  echo "Done. Certificate for '$(HOST)' is installed."; \
+	  echo "  If this is the first enrolled agent, restart the dashboard to activate mTLS:"; \
+	  echo "    sudo systemctl restart sddb-dashboard"; \
+	  echo "  Start the agent on $(HOST):"; \
+	  echo "    ssh $(SSH_USER)@$(HOST) 'sudo systemctl enable --now sddb-agent'"; \
+	  echo ""
