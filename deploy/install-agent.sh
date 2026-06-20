@@ -17,7 +17,6 @@ REPO="smokinstack/sddb"
 INSTALL_BIN="/usr/local/bin/sddb-agent"
 CERT_DIR="/etc/sddb"
 SERVICE_FILE="/etc/systemd/system/sddb-agent.service"
-SERVICE_URL="https://raw.githubusercontent.com/${REPO}/main/deploy/sddb-agent.service"
 
 # ── helpers ────────────────────────────────────────────────────────────────────
 
@@ -51,7 +50,7 @@ esac
 
 info "Resolving latest release from GitHub..."
 VERSION=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
-  | grep '"tag_name"' | cut -d'"' -f4)
+  | grep -oP '"tag_name":\s*"\K[^"]+')
 [[ -n "$VERSION" ]] || die "Could not determine latest version from GitHub API"
 VERSION_NO_V="${VERSION#v}"
 info "Latest version: ${VERSION}"
@@ -63,19 +62,37 @@ DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${VERSION}/${TARBALL}
 
 info "Downloading ${TARBALL}..."
 TMP_DIR=$(mktemp -d)
-trap 'rm -rf "$TMP_DIR"' EXIT
+trap 'rm -rf "$TMP_DIR"' EXIT INT TERM HUP
 
-curl -fsSL "$DOWNLOAD_URL" | tar xz -C "$TMP_DIR"
+curl -fsSL "$DOWNLOAD_URL" -o "$TMP_DIR/$TARBALL"
+
+# Verify checksum when the release includes a checksums file.
+CHECKSUM_URL="https://github.com/${REPO}/releases/download/${VERSION}/checksums.txt"
+if curl -fsSL "$CHECKSUM_URL" -o "$TMP_DIR/checksums.txt" 2>/dev/null; then
+  grep "$TARBALL" "$TMP_DIR/checksums.txt" | sha256sum -c - \
+    || die "Checksum verification failed — aborting"
+  info "Checksum verified."
+else
+  warn "No checksums.txt found for this release — skipping verification."
+fi
+
+tar xz -C "$TMP_DIR" -f "$TMP_DIR/$TARBALL"
 
 [[ -f "$TMP_DIR/sddb-agent" ]] || die "Binary not found in archive — check release asset names"
 
 install -m755 "$TMP_DIR/sddb-agent" "$INSTALL_BIN"
 info "Installed binary: ${INSTALL_BIN}"
 
+"$INSTALL_BIN" --version &>/dev/null \
+  || die "Binary installed but failed to execute — wrong architecture or corrupt download?"
+info "Binary smoke test passed."
+
 # ── create system user ─────────────────────────────────────────────────────────
 
+NOLOGIN=$(command -v nologin 2>/dev/null || echo /usr/sbin/nologin)
+
 if ! id -u sddb &>/dev/null; then
-  useradd -r -s /sbin/nologin sddb
+  useradd -r -s "$NOLOGIN" sddb
   info "Created system user: sddb"
 else
   info "System user already exists: sddb"
@@ -85,7 +102,8 @@ if getent group docker &>/dev/null; then
   usermod -aG docker sddb
   info "Added sddb to the docker group"
 else
-  warn "docker group not found — add sddb to the docker group manually before starting the agent"
+  warn "docker group not found. Run this after Docker is installed:"
+  warn "  sudo usermod -aG docker sddb && sudo systemctl restart sddb-agent"
 fi
 
 # ── create cert directory ──────────────────────────────────────────────────────
@@ -97,10 +115,20 @@ info "Cert directory ready: ${CERT_DIR}"
 
 # ── install systemd unit ───────────────────────────────────────────────────────
 
+# Fetch the service file pinned to the installed version tag, not main.
+SERVICE_URL="https://raw.githubusercontent.com/${REPO}/${VERSION}/deploy/sddb-agent.service"
+
 info "Installing systemd service unit..."
-curl -fsSL "$SERVICE_URL" | tee "$SERVICE_FILE" > /dev/null
+curl -fsSL "$SERVICE_URL" -o "$SERVICE_FILE"
 systemctl daemon-reload
 info "Installed service: ${SERVICE_FILE}"
+
+# ── restart if already running (upgrade path) ─────────────────────────────────
+
+if systemctl is-active --quiet sddb-agent; then
+  info "Restarting running sddb-agent service..."
+  systemctl restart sddb-agent
+fi
 
 # ── done ───────────────────────────────────────────────────────────────────────
 
