@@ -108,12 +108,14 @@ enroll:
 	  echo "==> Enrolling certificate for $(HOST) ..."; \
 	  sudo sddb-dashboard enroll $(HOST) -data-dir $(DATA_DIR) -out $$ENROLL_TMP; \
 	  echo "==> Pushing certificates to $(SSH_USER)@$(HOST) ..."; \
-	  ssh $(SSH_USER)@$(HOST) "sudo mkdir -p /etc/sddb"; \
-	  ssh $(SSH_USER)@$(HOST) "sudo tee /etc/sddb/agent.crt > /dev/null" < $$ENROLL_TMP/$(HOST)-agent.crt; \
-	  ssh $(SSH_USER)@$(HOST) "sudo tee /etc/sddb/agent.key > /dev/null" < $$ENROLL_TMP/$(HOST)-agent.key; \
-	  ssh $(SSH_USER)@$(HOST) "sudo tee /etc/sddb/ca.crt    > /dev/null" < $$ENROLL_TMP/$(HOST)-ca.crt; \
-	  echo "==> Setting ownership and permissions on $(HOST) ..."; \
-	  ssh $(SSH_USER)@$(HOST) "sudo chown sddb:sddb /etc/sddb/agent.crt /etc/sddb/agent.key /etc/sddb/ca.crt && sudo chmod 640 /etc/sddb/agent.crt /etc/sddb/ca.crt && sudo chmod 600 /etc/sddb/agent.key"; \
+	  cp $$ENROLL_TMP/$(HOST)-agent.crt $$ENROLL_TMP/agent.crt; \
+	  cp $$ENROLL_TMP/$(HOST)-agent.key $$ENROLL_TMP/agent.key; \
+	  cp $$ENROLL_TMP/$(HOST)-ca.crt    $$ENROLL_TMP/ca.crt; \
+	  tar -C $$ENROLL_TMP -cf - agent.crt agent.key ca.crt | \
+	    ssh $(SSH_USER)@$(HOST) "sudo mkdir -p /etc/sddb && sudo tar -C /etc/sddb -xf - \
+	      && sudo chown sddb:sddb /etc/sddb/agent.crt /etc/sddb/agent.key /etc/sddb/ca.crt \
+	      && sudo chmod 640 /etc/sddb/agent.crt /etc/sddb/ca.crt \
+	      && sudo chmod 600 /etc/sddb/agent.key"; \
 	  echo ""; \
 	  echo "Done. Certificate for '$(HOST)' is installed."; \
 	  echo "  If this is the first enrolled agent, restart the dashboard to activate mTLS:"; \
