@@ -1,8 +1,12 @@
-.PHONY: all agent dashboard build clean install install-agent-service install-dashboard-service install-service
+.PHONY: all agent dashboard build clean install install-agent-service install-dashboard-service install-service enroll
 
-GOFLAGS := -trimpath
-AGENT_OUT  := bin/sddb-agent
-DASH_OUT   := bin/sddb-dashboard
+GOFLAGS   := -trimpath
+AGENT_OUT := bin/sddb-agent
+DASH_OUT  := bin/sddb-dashboard
+
+# enroll target defaults — override on the command line as needed
+DATA_DIR  ?= /var/lib/sddb
+SSH_USER  ?= $(shell id -un)
 
 all: build
 
@@ -63,3 +67,34 @@ install-dashboard-service: dashboard
 
 # Install both services (agent + dashboard) on this machine.
 install-service: install-agent-service install-dashboard-service
+
+# Enroll a new agent and push its certificates to the agent host over SSH.
+# Usage: make enroll HOST=myserver [SSH_USER=ubuntu] [DATA_DIR=/var/lib/sddb]
+#
+# Requires:
+#   - sddb-dashboard installed and data initialised on this host
+#   - SSH access to HOST (key-based auth recommended)
+#   - The sddb user already exists on HOST (created by deploy/install-agent.sh)
+enroll:
+	@test -n "$(HOST)" || (echo "Usage: make enroll HOST=<label> [SSH_USER=<user>]" && false)
+	@echo "==> Enrolling certificate for $(HOST) ..."
+	sudo sddb-dashboard enroll $(HOST) -data-dir $(DATA_DIR) -out /tmp/sddb-certs-$(HOST)
+	@echo "==> Copying certificates to $(SSH_USER)@$(HOST) ..."
+	scp /tmp/sddb-certs-$(HOST)/$(HOST)-agent.crt $(SSH_USER)@$(HOST):/tmp/agent.crt
+	scp /tmp/sddb-certs-$(HOST)/$(HOST)-agent.key $(SSH_USER)@$(HOST):/tmp/agent.key
+	scp /tmp/sddb-certs-$(HOST)/$(HOST)-ca.crt    $(SSH_USER)@$(HOST):/tmp/ca.crt
+	@echo "==> Installing certificates on $(HOST) ..."
+	ssh $(SSH_USER)@$(HOST) " \
+	  sudo mkdir -p /etc/sddb && \
+	  sudo mv /tmp/agent.crt /tmp/agent.key /tmp/ca.crt /etc/sddb/ && \
+	  sudo chown sddb:sddb /etc/sddb/agent.crt /etc/sddb/agent.key /etc/sddb/ca.crt && \
+	  sudo chmod 640 /etc/sddb/agent.crt /etc/sddb/ca.crt && \
+	  sudo chmod 600 /etc/sddb/agent.key"
+	@rm -rf /tmp/sddb-certs-$(HOST)
+	@echo ""
+	@echo "Done. Certificate for '$(HOST)' is installed."
+	@echo "  If this is the first enrolled agent, restart the dashboard to activate mTLS:"
+	@echo "    sudo systemctl restart sddb-dashboard"
+	@echo "  Start the agent on $(HOST):"
+	@echo "    ssh $(SSH_USER)@$(HOST) 'sudo systemctl enable --now sddb-agent'"
+	@echo ""
