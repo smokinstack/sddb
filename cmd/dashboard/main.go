@@ -168,7 +168,7 @@ func runEnroll(args []string) {
 	// Ensure the dashboard client cert also exists (generated once, reused).
 	ensureDashboardCert(*dataDir, ca)
 
-	certPEM, keyPEM, err := ca.IssueCert(pki.AgentCN)
+	certPEM, keyPEM, err := ca.IssueServerCert(pki.AgentCN)
 	if err != nil {
 		log.Fatalf("issue cert: %v", err)
 	}
@@ -341,7 +341,7 @@ func loadOrCreateDashboardCert(dataDir string, ca *pki.CA) (certPEM, keyPEM []by
 	keyPath := filepath.Join(dataDir, "dashboard.key")
 
 	if _, err := os.Stat(certPath); os.IsNotExist(err) {
-		certPEM, keyPEM, err = ca.IssueCert(pki.DashboardCN)
+		certPEM, keyPEM, err = ca.IssueClientCert(pki.DashboardCN)
 		if err != nil {
 			return nil, nil, fmt.Errorf("issue dashboard cert: %w", err)
 		}
