@@ -21,7 +21,7 @@ type Poller struct {
 	state     *State
 	interval  time.Duration
 	notify    chan struct{} // written to on every successful poll
-	tlsConfig *tls.Config  // nil → plain HTTP
+	tlsConfig *tls.Config   // nil → plain HTTP
 	cfg       *config.Store
 
 	// Shared HTTP clients — reused across all requests so connections are

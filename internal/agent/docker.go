@@ -30,8 +30,8 @@ type prevNetStats struct {
 
 // DockerClient wraps the Docker SDK client with helpers.
 type DockerClient struct {
-	cli      *client.Client
-	prevMu   sync.Mutex
+	cli       *client.Client
+	prevMu    sync.Mutex
 	prevStats map[string]prevNetStats // keyed by container ID
 }
 

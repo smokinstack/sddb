@@ -15,9 +15,9 @@ import (
 
 // ScanResult describes a discovered agent on the network.
 type ScanResult struct {
-	Addr     string          `json:"addr"`
-	Info     types.AgentInfo `json:"info"`
-	Reachable bool           `json:"reachable"`
+	Addr      string          `json:"addr"`
+	Info      types.AgentInfo `json:"info"`
+	Reachable bool            `json:"reachable"`
 }
 
 // ScanNetwork scans the given CIDR for hosts listening on agentPort.

@@ -140,7 +140,6 @@ func (d *Dashboard) requireAuth(next http.Handler) http.Handler {
 	})
 }
 
-
 func (d *Dashboard) handleLogin(w http.ResponseWriter, r *http.Request) {
 	d.credsMu.RLock()
 	creds := d.creds
@@ -723,16 +722,16 @@ func (d *Dashboard) templateData(agents []*AgentRecord) TemplateAgentData {
 
 func loadTemplates(webFS fs.FS) (*template.Template, error) {
 	funcMap := template.FuncMap{
-		"formatBytes":   formatBytes,
-		"formatRate":    formatRate,
-		"formatPercent": formatPercent,
-		"stateClass":    stateClass,
-		"stateBadge":    stateBadge,
-		"since":         since,
-		"sinceRFC":      sinceRFC,
-		"recentExit":    recentExit,
-		"add":           func(a, b int) int { return a + b },
-		"itoa":          strconv.Itoa,
+		"formatBytes":       formatBytes,
+		"formatRate":        formatRate,
+		"formatPercent":     formatPercent,
+		"stateClass":        stateClass,
+		"stateBadge":        stateBadge,
+		"since":             since,
+		"sinceRFC":          sinceRFC,
+		"recentExit":        recentExit,
+		"add":               func(a, b int) int { return a + b },
+		"itoa":              strconv.Itoa,
 		"cpuColor":          cpuColor,
 		"memColor":          memColor,
 		"clamp":             clamp,

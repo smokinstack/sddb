@@ -20,8 +20,8 @@ type ContainerState struct {
 
 	// CPU & memory
 	CPUPercent float64 `json:"cpu_percent"`
-	MemUsage   uint64  `json:"mem_usage"`  // bytes
-	MemLimit   uint64  `json:"mem_limit"`  // bytes
+	MemUsage   uint64  `json:"mem_usage"` // bytes
+	MemLimit   uint64  `json:"mem_limit"` // bytes
 	MemPercent float64 `json:"mem_percent"`
 
 	// Network rates (bytes/sec computed by agent)
