@@ -13,8 +13,6 @@ import (
 	dockertypes "github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/smokinstack/sddb/internal/types"
@@ -31,6 +29,7 @@ type prevNetStats struct {
 // DockerClient wraps the Docker SDK client with helpers.
 type DockerClient struct {
 	cli       *client.Client
+	api       dockerAPI // used for pulls and recreates; cli in production, a fake in tests
 	prevMu    sync.Mutex
 	prevStats map[string]prevNetStats // keyed by container ID
 }
@@ -42,6 +41,7 @@ func NewDockerClient() (*DockerClient, error) {
 	}
 	return &DockerClient{
 		cli:       cli,
+		api:       cli,
 		prevStats: make(map[string]prevNetStats),
 	}, nil
 }
@@ -222,7 +222,7 @@ func (d *DockerClient) RestartContainer(ctx context.Context, id string) error {
 // UpgradeContainer pulls the latest image and recreates the container.
 // It detects whether the container was started via Compose or bare CLI.
 func (d *DockerClient) UpgradeContainer(ctx context.Context, id string) error {
-	info, err := d.cli.ContainerInspect(ctx, id)
+	info, err := d.api.ContainerInspect(ctx, id)
 	if err != nil {
 		return fmt.Errorf("inspect: %w", err)
 	}
@@ -230,10 +230,20 @@ func (d *DockerClient) UpgradeContainer(ctx context.Context, id string) error {
 	if info.Config.Labels["com.docker.compose.project"] != "" {
 		return d.upgradeCompose(ctx, info)
 	}
-	return d.upgradeCLI(ctx, info)
+	return upgradeCLI(ctx, d.api, info)
 }
 
-func (d *DockerClient) upgradeCompose(ctx context.Context, info dockertypes.ContainerJSON) error {
+// PullImage pulls the latest version of the container's image without
+// recreating the container.
+func (d *DockerClient) PullImage(ctx context.Context, id string) error {
+	info, err := d.api.ContainerInspect(ctx, id)
+	if err != nil {
+		return fmt.Errorf("inspect: %w", err)
+	}
+	return pullImage(ctx, d.api, info.Config.Image)
+}
+
+func (d *DockerClient) upgradeCompose(ctx context.Context, info container.InspectResponse) error {
 	composeFile := info.Config.Labels["com.docker.compose.project.config_files"]
 	service := info.Config.Labels["com.docker.compose.service"]
 	workDir := info.Config.Labels["com.docker.compose.project.working_dir"]
@@ -244,46 +254,6 @@ func (d *DockerClient) upgradeCompose(ctx context.Context, info dockertypes.Cont
 		return fmt.Errorf("compose pull: %w", err)
 	}
 	return runCompose(ctx, workDir, composeFile, "up", "-d", service)
-}
-
-func (d *DockerClient) upgradeCLI(ctx context.Context, info dockertypes.ContainerJSON) error {
-	imageName := info.Config.Image
-
-	// Pull new image
-	reader, err := d.cli.ImagePull(ctx, imageName, image.PullOptions{})
-	if err != nil {
-		return fmt.Errorf("pull image: %w", err)
-	}
-	io.Copy(io.Discard, reader)
-	reader.Close()
-
-	// Stop and remove the old container
-	timeout := 10
-	if err := d.cli.ContainerStop(ctx, info.ID, container.StopOptions{Timeout: &timeout}); err != nil {
-		return fmt.Errorf("stop: %w", err)
-	}
-	if err := d.cli.ContainerRemove(ctx, info.ID, container.RemoveOptions{}); err != nil {
-		return fmt.Errorf("remove: %w", err)
-	}
-
-	// Recreate using the original image name (tag), not the sha256 ID, so
-	// that future update checks and pulls continue to work against the registry.
-	// Docker inspect returns names with a leading "/"; strip it for ContainerCreate.
-	cfg := info.Config
-	cfg.Image = imageName
-
-	hostCfg := info.HostConfig
-	netCfg := &network.NetworkingConfig{
-		EndpointsConfig: info.NetworkSettings.Networks,
-	}
-
-	name := strings.TrimPrefix(info.Name, "/")
-	created, err := d.cli.ContainerCreate(ctx, cfg, hostCfg, netCfg, nil, name)
-	if err != nil {
-		return fmt.Errorf("create: %w", err)
-	}
-
-	return d.cli.ContainerStart(ctx, created.ID, container.StartOptions{})
 }
 
 // PruneImages removes dangling images.
