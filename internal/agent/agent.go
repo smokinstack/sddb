@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -12,7 +13,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/docker/docker/api/types/image"
 	"github.com/smokinstack/sddb/internal/types"
 )
 
@@ -38,6 +38,10 @@ type Agent struct {
 	// Per-image update check cache: imageID → (available, checkedAt)
 	updateCache   map[string]updateEntry
 	updateCacheMu sync.Mutex
+
+	// Background upgrades and pulls, keyed by container name.
+	jobs      *jobTracker
+	onJobDone func() // runs after each job; refreshes stats (overridable in tests)
 }
 
 type updateEntry struct {
@@ -46,12 +50,15 @@ type updateEntry struct {
 }
 
 func New(cfg Config, docker *DockerClient) *Agent {
-	return &Agent{
+	a := &Agent{
 		cfg:         cfg,
 		docker:      docker,
 		host:        &hostSampler{},
 		updateCache: make(map[string]updateEntry),
+		jobs:        newJobTracker(),
 	}
+	a.onJobDone = func() { a.refresh(context.Background()) }
+	return a
 }
 
 // Run starts the background refresh loop and the HTTP server.
@@ -136,6 +143,7 @@ func (a *Agent) refresh(ctx context.Context) error {
 		Host:       a.host.sample(containers),
 		Containers: containers,
 		Timestamp:  time.Now().Unix(),
+		Jobs:       a.jobs.snapshot(),
 	}
 
 	a.mu.Lock()
@@ -236,11 +244,7 @@ func (a *Agent) handleCommand(w http.ResponseWriter, r *http.Request) {
 	}
 	containerID, action := parts[0], parts[1]
 
-	timeout := 60 * time.Second
-	if action == "upgrade" {
-		timeout = 10 * time.Minute
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), timeout)
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
 
 	var err error
@@ -251,45 +255,10 @@ func (a *Agent) handleCommand(w http.ResponseWriter, r *http.Request) {
 		err = a.docker.StopContainer(ctx, containerID)
 	case "restart":
 		err = a.docker.RestartContainer(ctx, containerID)
-	case "upgrade":
-		err = a.docker.UpgradeContainer(ctx, containerID)
-		if err == nil {
-			// Invalidate update cache for this container's image
-			a.mu.RLock()
-			for _, c := range a.lastStats.Containers {
-				if c.ID == containerID || c.ShortID == containerID {
-					a.updateCacheMu.Lock()
-					delete(a.updateCache, c.ImageID)
-					a.updateCacheMu.Unlock()
-					break
-				}
-			}
-			a.mu.RUnlock()
-			// Prune dangling images in background
-			go func() {
-				a.docker.PruneImages(context.Background())
-				// Force an immediate refresh
-				a.refresh(context.Background())
-			}()
-		}
-	case "pull":
-		// Pull latest image without recreating the container
-		a.mu.RLock()
-		var imgName string
-		for _, c := range a.lastStats.Containers {
-			if c.ID == containerID || c.ShortID == containerID {
-				imgName = c.Image
-				break
-			}
-		}
-		a.mu.RUnlock()
-		if imgName != "" {
-			reader, pullErr := a.docker.cli.ImagePull(ctx, imgName, image.PullOptions{})
-			if pullErr == nil {
-				reader.Close()
-			}
-			err = pullErr
-		}
+	case "upgrade", "pull":
+		// Long-running: start in the background and report via stats Jobs.
+		a.startJob(ctx, w, containerID, action)
+		return
 	default:
 		http.Error(w, fmt.Sprintf("unknown action: %s", action), http.StatusBadRequest)
 		return
@@ -307,6 +276,41 @@ func (a *Agent) handleCommand(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	writeJSON(w, types.CommandResponse{Success: true, Message: "ok"})
+}
+
+// startJob starts an upgrade or pull of containerID in the background and
+// responds immediately. The outcome appears in StatsResponse.Jobs.
+func (a *Agent) startJob(ctx context.Context, w http.ResponseWriter, containerID, action string) {
+	info, err := a.docker.api.ContainerInspect(ctx, containerID)
+	if err != nil {
+		writeJSON(w, types.CommandResponse{Success: false, Message: err.Error()})
+		return
+	}
+	name := strings.TrimPrefix(info.Name, "/")
+	oldImageID := info.Image
+
+	run := func(jctx context.Context) error {
+		if action == "pull" {
+			return a.docker.PullImage(jctx, info.ID)
+		}
+		if err := a.docker.UpgradeContainer(jctx, info.ID); err != nil {
+			return err
+		}
+		a.updateCacheMu.Lock()
+		delete(a.updateCache, oldImageID)
+		a.updateCacheMu.Unlock()
+		if err := a.docker.PruneImages(jctx); err != nil {
+			log.Printf("prune images after upgrading %s: %v", name, err)
+		}
+		return nil
+	}
+
+	err = a.jobs.start(name, action, run, a.onJobDone)
+	if errors.Is(err, errJobRunning) {
+		writeJSON(w, types.CommandResponse{Success: false, Message: fmt.Sprintf("an upgrade or pull is already running for %s", name)})
+		return
+	}
+	writeJSON(w, types.CommandResponse{Success: true, Pending: true, Message: action + " started"})
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
