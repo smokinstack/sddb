@@ -36,15 +36,7 @@ type Poller struct {
 }
 
 func NewPoller(state *State, interval time.Duration, notify chan struct{}, tlsConfig *tls.Config, cfg *config.Store) *Poller {
-	var transport http.RoundTripper
-	if tlsConfig != nil {
-		transport = &http.Transport{
-			TLSClientConfig: tlsConfig,
-			// Allow enough idle connections for all agents.
-			MaxIdleConns:        32,
-			MaxIdleConnsPerHost: 4,
-		}
-	}
+	transport := newAgentTransport(tlsConfig)
 	return &Poller{
 		state:           state,
 		interval:        interval,

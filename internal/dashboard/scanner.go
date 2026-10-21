@@ -31,6 +31,12 @@ func ScanNetwork(ctx context.Context, cidr string, agentPort int, concurrency in
 	results := make(chan ScanResult, len(ips))
 	sem := make(chan struct{}, concurrency)
 
+	// One transport for the whole scan, without keep-alives: each probe is a
+	// one-off request, and a transport per probe would leak its connection.
+	transport := newAgentTransport(tlsCfg)
+	transport.DisableKeepAlives = true
+	client := &http.Client{Timeout: 2 * time.Second, Transport: transport}
+
 	var wg sync.WaitGroup
 	for _, ip := range ips {
 		ip := ip
@@ -41,7 +47,7 @@ func ScanNetwork(ctx context.Context, cidr string, agentPort int, concurrency in
 			defer func() { <-sem }()
 
 			addr := fmt.Sprintf("%s:%d", ip, agentPort)
-			if result, ok := probeAgent(ctx, addr, tlsCfg); ok {
+			if result, ok := probeAgent(ctx, addr, agentScheme(tlsCfg), client); ok {
 				select {
 				case results <- result:
 				case <-ctx.Done():
@@ -52,13 +58,14 @@ func ScanNetwork(ctx context.Context, cidr string, agentPort int, concurrency in
 
 	go func() {
 		wg.Wait()
+		transport.CloseIdleConnections()
 		close(results)
 	}()
 
 	return results, nil
 }
 
-func probeAgent(ctx context.Context, addr string, tlsCfg *tls.Config) (ScanResult, bool) {
+func probeAgent(ctx context.Context, addr, scheme string, client *http.Client) (ScanResult, bool) {
 	// Quick TCP dial first (much faster than HTTP timeout)
 	dialCtx, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
 	defer cancel()
@@ -71,15 +78,8 @@ func probeAgent(ctx context.Context, addr string, tlsCfg *tls.Config) (ScanResul
 	conn.Close()
 
 	// TCP is open — now verify it's actually an sddb agent
-	scheme := "http"
-	var transport http.RoundTripper
-	if tlsCfg != nil {
-		scheme = "https"
-		transport = &http.Transport{TLSClientConfig: tlsCfg}
-	}
 	url := fmt.Sprintf("%s://%s/api/info", scheme, addr)
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	client := &http.Client{Timeout: 2 * time.Second, Transport: transport}
 	resp, err := client.Do(req)
 	if err != nil {
 		return ScanResult{}, false

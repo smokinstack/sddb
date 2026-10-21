@@ -32,7 +32,8 @@ type Dashboard struct {
 	tmpl      *template.Template
 	webFS     fs.FS
 	agentPort int
-	tlsConfig *tls.Config // nil = plain HTTP to agents
+	tlsConfig *tls.Config  // nil = plain HTTP to agents
+	agentHTTP *http.Client // shared client for logs/commands (see newAgentClient)
 	credsMu   sync.RWMutex
 	creds     *auth.Credentials
 	sessions  *auth.Sessions
@@ -66,6 +67,7 @@ func NewDashboard(state *State, poller *Poller, notify chan struct{}, webFS fs.F
 		webFS:     webFS,
 		agentPort: cfg.AgentPort,
 		tlsConfig: cfg.TLS,
+		agentHTTP: newAgentClient(cfg.TLS),
 		creds:     cfg.Creds,
 		sessions:  cfg.Sessions,
 		dataDir:   cfg.DataDir,
@@ -249,22 +251,16 @@ func (d *Dashboard) handleLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate agent address is a registered agent to prevent SSRF.
-	if _, ok := d.state.findByAddr(agentAddr); !ok {
+	if _, ok := d.state.Get(agentAddr); !ok {
 		http.Error(w, "unknown agent", http.StatusBadRequest)
 		return
 	}
 
-	scheme := "http"
-	var transport http.RoundTripper
-	if d.tlsConfig != nil {
-		scheme = "https"
-		transport = &http.Transport{TLSClientConfig: d.tlsConfig}
-	}
-
-	url := fmt.Sprintf("%s://%s/api/containers/%s/logs?tail=%s", scheme, agentAddr, containerID, tail)
-	req, _ := http.NewRequestWithContext(r.Context(), http.MethodGet, url, nil)
-	client := &http.Client{Timeout: 30 * time.Second, Transport: transport}
-	resp, err := client.Do(req)
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	url := fmt.Sprintf("%s://%s/api/containers/%s/logs?tail=%s", agentScheme(d.tlsConfig), agentAddr, containerID, tail)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	resp, err := d.agentHTTP.Do(req)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
@@ -615,7 +611,7 @@ func (d *Dashboard) handleCommand(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate agent_addr is a registered agent to prevent SSRF.
-	agent, ok := d.state.findByAddr(req.AgentAddr)
+	agent, ok := d.state.Get(req.AgentAddr)
 	if !ok {
 		http.Error(w, "unknown agent", http.StatusBadRequest)
 		return
@@ -639,18 +635,11 @@ func (d *Dashboard) handleCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	scheme := "http"
-	var transport http.RoundTripper
-	if d.tlsConfig != nil {
-		scheme = "https"
-		transport = &http.Transport{TLSClientConfig: d.tlsConfig}
-	}
-
-	url := fmt.Sprintf("%s://%s/api/containers/%s/%s", scheme, req.AgentAddr, req.ContainerID, req.Action)
-	agentReq, _ := http.NewRequestWithContext(r.Context(), http.MethodPost, url, nil)
-
-	client := &http.Client{Timeout: 90 * time.Second, Transport: transport}
-	resp, err := client.Do(agentReq)
+	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
+	defer cancel()
+	url := fmt.Sprintf("%s://%s/api/containers/%s/%s", agentScheme(d.tlsConfig), req.AgentAddr, req.ContainerID, req.Action)
+	agentReq, _ := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
+	resp, err := d.agentHTTP.Do(agentReq)
 	if err != nil {
 		writeJSON(w, types.CommandResponse{Success: false, Message: err.Error()})
 		return

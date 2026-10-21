@@ -309,6 +309,9 @@ func runDashboard() {
 	srv := &http.Server{
 		Addr:    *addr,
 		Handler: dash.Handler(),
+		// No WriteTimeout: network scans stream their results.
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       2 * time.Minute,
 	}
 	go func() {
 		<-ctx.Done()

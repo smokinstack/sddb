@@ -73,6 +73,9 @@ func (a *Agent) Run(ctx context.Context) error {
 		Addr:      a.cfg.ListenAddr,
 		Handler:   mux,
 		TLSConfig: a.cfg.TLS,
+		// Bound slow/idle clients so stale connections can't pile up.
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       2 * time.Minute,
 	}
 
 	go func() {
