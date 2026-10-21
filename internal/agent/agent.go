@@ -16,13 +16,12 @@ import (
 	"github.com/smokinstack/sddb/internal/types"
 )
 
-const version = "1.0.0"
-
 // Config holds agent runtime configuration.
 type Config struct {
 	ID             string
 	ListenAddr     string
 	UpdateInterval time.Duration
+	Version        string      // reported to the dashboard
 	TLS            *tls.Config // nil = plain HTTP
 }
 
@@ -129,7 +128,7 @@ func (a *Agent) refresh(ctx context.Context) error {
 			ID:             a.cfg.ID,
 			Hostname:       hostname,
 			UpdateInterval: int(a.cfg.UpdateInterval.Seconds()),
-			Version:        version,
+			Version:        a.cfg.Version,
 		},
 		Host:       a.host.sample(containers),
 		Containers: containers,

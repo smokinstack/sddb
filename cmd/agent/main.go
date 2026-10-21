@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -14,6 +15,9 @@ import (
 	"github.com/smokinstack/sddb/internal/pki"
 )
 
+// version is set at build time via -ldflags "-X main.version=...".
+var version = "dev"
+
 func main() {
 	addr := flag.String("addr", ":8484", "listen address")
 	interval := flag.Duration("interval", 5*time.Second, "stats refresh interval")
@@ -21,7 +25,13 @@ func main() {
 	tlsCert := flag.String("tls-cert", "", "path to TLS certificate file (enables mTLS)")
 	tlsKey := flag.String("tls-key", "", "path to TLS private key file")
 	tlsCA := flag.String("tls-ca", "", "path to CA certificate file (verifies dashboard identity)")
+	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println("sddb-agent", version)
+		return
+	}
 
 	agentID := *id
 	if agentID == "" {
@@ -42,6 +52,7 @@ func main() {
 		ID:             agentID,
 		ListenAddr:     *addr,
 		UpdateInterval: *interval,
+		Version:        version,
 	}
 
 	if *tlsCert == "" || *tlsKey == "" || *tlsCA == "" {

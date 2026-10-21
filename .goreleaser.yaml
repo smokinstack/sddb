@@ -7,7 +7,7 @@ builds:
     goos: [linux, darwin]
     goarch: [amd64, arm64]
     env: [CGO_ENABLED=0]
-    ldflags: ["-s -w"]
+    ldflags: ["-s -w -X main.version={{.Version}}"]
 
   - id: agent
     binary: sddb-agent
@@ -15,7 +15,7 @@ builds:
     goos: [linux]
     goarch: [amd64, arm64]
     env: [CGO_ENABLED=0]
-    ldflags: ["-s -w"]
+    ldflags: ["-s -w -X main.version={{.Version}}"]
 
 archives:
   - id: dashboard
