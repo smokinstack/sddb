@@ -635,7 +635,14 @@ func (d *Dashboard) handleCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
+	// Current agents answer upgrade/pull at once and run them in the
+	// background. Older agents run them inside the request, and cancelling
+	// that request kills the upgrade, so allow them plenty of time.
+	timeout := 90 * time.Second
+	if req.Action == "upgrade" || req.Action == "pull" {
+		timeout = 15 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
 	url := fmt.Sprintf("%s://%s/api/containers/%s/%s", agentScheme(d.tlsConfig), req.AgentAddr, req.ContainerID, req.Action)
 	agentReq, _ := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)

@@ -198,7 +198,7 @@
           {{if $running}}
             <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-3">
               {{range $running}}
-                {{template "container-card.html" (dict "C" . "AgentAddr" $.Addr)}}
+                {{template "container-card.html" (dict "C" . "AgentAddr" $.Addr "Job" (index $.LastStats.Jobs .Name))}}
               {{end}}
             </div>
           {{end}}
@@ -215,7 +215,7 @@
             {{end}}
             <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-3">
               {{range $stopped}}
-                {{template "container-card.html" (dict "C" . "AgentAddr" $.Addr)}}
+                {{template "container-card.html" (dict "C" . "AgentAddr" $.Addr "Job" (index $.LastStats.Jobs .Name))}}
               {{end}}
             </div>
           </div>
@@ -232,6 +232,7 @@
 {{define "container-card.html"}}
 {{$c := .C}}
 {{$addr := .AgentAddr}}
+{{$job := .Job}}
 <div class="bg-slate-950 border border-slate-800 rounded-lg card-hover flex flex-col" data-container-id="{{$c.ShortID}}">
 
   <!-- Card header — always visible, click to collapse -->
@@ -312,6 +313,15 @@
     </div>
     {{end}}
 
+    {{/* Background upgrade / pull started from the dashboard */}}
+    {{if eq $job.State "running"}}
+    <div class="text-xs text-blue-400">{{if eq $job.Action "pull"}}Pulling image…{{else}}Upgrading…{{end}}</div>
+    {{else if eq $job.State "failed"}}
+    <div class="text-xs text-red-400 truncate" title="{{$job.Error}}">
+      {{if eq $job.Action "pull"}}Pull{{else}}Upgrade{{end}} failed: {{$job.Error}}
+    </div>
+    {{end}}
+
     {{if $c.ComposeProject}}
     <div class="text-xs text-slate-600 truncate" title="{{$c.ComposeFile}}">
       <span class="text-slate-500">compose</span> {{$c.ComposeProject}}/{{$c.ComposeService}}
@@ -349,7 +359,7 @@
         title="Auto-update: off">
         Auto
       </button>
-      {{if $c.UpdateAvailable}}
+      {{if and $c.UpdateAvailable (ne $job.State "running")}}
         <button onclick="containerAction('{{$addr}}','{{$c.ID}}','upgrade')"
           class="flex-1 py-1 text-xs text-amber-400 hover:text-amber-300 hover:bg-amber-500/10 rounded border border-amber-500/30 transition-colors font-medium">
           Upgrade

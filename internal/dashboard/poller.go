@@ -29,24 +29,56 @@ type Poller struct {
 	pollClient    *http.Client
 	upgradeClient *http.Client
 
-	upgradeMu       sync.Mutex
-	lastAutoUpgrade map[string]time.Time // "addr::name" → last upgrade time
+	upgradeMu sync.Mutex
+	auto      map[string]*autoUpdateState // "addr::name" → auto-update bookkeeping
+	now       func() time.Time            // clock; overridable in tests
 
 	notifier *Notifier
+}
+
+// Auto-update pacing. After a successful trigger a container is left alone
+// for autoCooldown. After a failure the wait doubles each time (10m, 20m,
+// 40m, … up to maxAutoBackoff) so a container that can never upgrade isn't
+// retried every poll; registry rate limits wait at least rateLimitBackoff.
+const (
+	autoCooldown     = 10 * time.Minute
+	maxAutoBackoff   = 6 * time.Hour
+	rateLimitBackoff = time.Hour
+)
+
+type autoUpdateState struct {
+	next         time.Time // no new attempt before this
+	failures     int       // consecutive failed upgrades
+	seenFinished int64     // agent job Finished time already accounted for
+}
+
+func failureBackoff(failures int, errMsg string) time.Duration {
+	d := maxAutoBackoff
+	if failures >= 1 && failures < 16 {
+		d = min(autoCooldown<<(failures-1), maxAutoBackoff)
+	}
+	if strings.Contains(errMsg, "toomanyrequests") || strings.Contains(errMsg, "rate limit") {
+		d = max(d, rateLimitBackoff)
+	}
+	return d
 }
 
 func NewPoller(state *State, interval time.Duration, notify chan struct{}, tlsConfig *tls.Config, cfg *config.Store) *Poller {
 	transport := newAgentTransport(tlsConfig)
 	return &Poller{
-		state:           state,
-		interval:        interval,
-		notify:          notify,
-		tlsConfig:       tlsConfig,
-		cfg:             cfg,
-		pollClient:      &http.Client{Timeout: 10 * time.Second, Transport: transport},
-		upgradeClient:   &http.Client{Timeout: 5 * time.Minute, Transport: transport},
-		lastAutoUpgrade: make(map[string]time.Time),
-		notifier:        newNotifier(cfg),
+		state:      state,
+		interval:   interval,
+		notify:     notify,
+		tlsConfig:  tlsConfig,
+		cfg:        cfg,
+		pollClient: &http.Client{Timeout: 10 * time.Second, Transport: transport},
+		// Current agents start upgrades in the background and answer at once;
+		// the long timeout only matters for older agents that upgrade
+		// synchronously, where giving up early would kill the upgrade.
+		upgradeClient: &http.Client{Timeout: 15 * time.Minute, Transport: transport},
+		auto:          make(map[string]*autoUpdateState),
+		now:           time.Now,
+		notifier:      newNotifier(cfg),
 	}
 }
 
@@ -84,12 +116,13 @@ func (p *Poller) pollOne(ctx context.Context, addr string) {
 	case p.notify <- struct{}{}:
 	default:
 	}
-	go p.runAutoUpdates(addr, resp.Containers)
+	go p.runAutoUpdates(addr, resp.Containers, resp.Jobs)
 }
 
-// runAutoUpdates upgrades any container that has auto-update enabled and an update available.
-func (p *Poller) runAutoUpdates(addr string, containers []types.ContainerState) {
-	const cooldown = 10 * time.Minute
+// runAutoUpdates upgrades any container that has auto-update enabled and an
+// update available. Upgrades run as background jobs on the agent; their
+// outcome comes back in later polls via jobs.
+func (p *Poller) runAutoUpdates(addr string, containers []types.ContainerState, jobs map[string]types.JobStatus) {
 	for _, c := range containers {
 		if !c.UpdateAvailable || c.State != "running" {
 			continue
@@ -102,36 +135,50 @@ func (p *Poller) runAutoUpdates(addr string, containers []types.ContainerState) 
 		}
 		key := addr + "::" + c.Name
 
-		// Atomic check-and-claim: hold the lock through both the check and
-		// the timestamp update so concurrent goroutines can't both pass.
+		// Check-and-claim under one lock so concurrent polls can't both fire.
 		p.upgradeMu.Lock()
-		last := p.lastAutoUpgrade[key]
-		if time.Since(last) < cooldown {
+		st := p.auto[key]
+		if st == nil {
+			st = &autoUpdateState{}
+			p.auto[key] = st
+		}
+		now := p.now()
+		if j, ok := jobs[c.Name]; ok && j.Action == "upgrade" {
+			if j.State == types.JobRunning {
+				p.upgradeMu.Unlock()
+				continue
+			}
+			if j.Finished > st.seenFinished {
+				st.seenFinished = j.Finished
+				if j.State == types.JobFailed {
+					st.failures++
+					wait := failureBackoff(st.failures, j.Error)
+					st.next = now.Add(wait)
+					log.Printf("auto-update: upgrade of %s on %s failed (%d in a row), next try in %s: %s",
+						c.Name, addr, st.failures, wait, j.Error)
+				} else {
+					st.failures = 0
+				}
+			}
+		}
+		if now.Before(st.next) {
 			p.upgradeMu.Unlock()
 			continue
 		}
-		p.lastAutoUpgrade[key] = time.Now() // claim the slot before releasing
+		st.next = now.Add(autoCooldown) // claim the slot before releasing the lock
 		p.upgradeMu.Unlock()
 
 		log.Printf("auto-update: upgrading %s on %s", c.Name, addr)
 		if err := p.sendUpgrade(addr, c.ID); err != nil {
-			errStr := err.Error()
-			if strings.Contains(errStr, "toomanyrequests") || strings.Contains(errStr, "rate limit") {
-				// Back off for 1 hour so we stop hammering the registry
-				log.Printf("auto-update: rate limited upgrading %s on %s — backing off 1h", c.Name, addr)
-				p.upgradeMu.Lock()
-				p.lastAutoUpgrade[key] = time.Now().Add(-cooldown + time.Hour)
-				p.upgradeMu.Unlock()
-			} else {
-				log.Printf("auto-update: upgrade %s on %s failed: %v", c.Name, addr, err)
-				// Release the slot so it retries after the normal cooldown
-				p.upgradeMu.Lock()
-				p.lastAutoUpgrade[key] = last
-				p.upgradeMu.Unlock()
-			}
+			p.upgradeMu.Lock()
+			st.failures++
+			wait := failureBackoff(st.failures, err.Error())
+			st.next = now.Add(wait)
+			p.upgradeMu.Unlock()
+			log.Printf("auto-update: could not start upgrade of %s on %s, next try in %s: %v", c.Name, addr, wait, err)
 			continue
 		}
-		// Re-poll after a short delay so the dashboard reflects the change
+		// Re-poll after a short delay so the dashboard shows the running job.
 		go func(a string) {
 			time.Sleep(3 * time.Second)
 			p.PollNow(context.Background(), a)
@@ -139,12 +186,9 @@ func (p *Poller) runAutoUpdates(addr string, containers []types.ContainerState) 
 	}
 }
 
+// sendUpgrade asks the agent to start an upgrade job.
 func (p *Poller) sendUpgrade(addr, containerID string) error {
-	scheme := "http"
-	if p.tlsConfig != nil {
-		scheme = "https"
-	}
-	url := fmt.Sprintf("%s://%s/api/containers/%s/upgrade", scheme, addr, containerID)
+	url := fmt.Sprintf("%s://%s/api/containers/%s/upgrade", agentScheme(p.tlsConfig), addr, containerID)
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, url, nil)
 	if err != nil {
 		return err
@@ -153,10 +197,17 @@ func (p *Poller) sendUpgrade(addr, containerID string) error {
 	if err != nil {
 		return err
 	}
-	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("agent returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	var cr types.CommandResponse
+	if err := json.Unmarshal(body, &cr); err != nil {
+		return fmt.Errorf("decode agent response: %w", err)
+	}
+	if !cr.Success {
+		return fmt.Errorf("agent refused upgrade: %s", cr.Message)
 	}
 	return nil
 }

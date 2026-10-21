@@ -500,14 +500,15 @@ Each container card has an **Auto** button. When enabled, the dashboard will aut
 
 1. The agent checks the image registry on each refresh cycle (every 5 minutes per image, cached). It fetches the remote manifest digest and compares it to the local `RepoDigests`. If they differ, the container gets an **update available** badge.
 2. After each successful poll, the dashboard checks all containers. If a container is **running**, has **update available**, and **Auto is enabled**, it sends an upgrade command to the agent.
-3. The agent pulls the new image and recreates the container. For compose containers it runs `docker compose pull` then `docker compose up -d`. For standalone containers it stops and removes the old one, then creates a new one with the same configuration.
-4. A **10-minute cooldown** applies per container to prevent repeated upgrade attempts. If the upgrade fails, the cooldown is immediately reset so it can retry.
+3. The agent starts the upgrade as a **background job** and answers immediately, so a slow pull can't be cut off by a request timeout. The container card shows *Upgrading…* while it runs and *Upgrade failed: …* if it fails (kept for an hour). Only one upgrade or pull runs per container at a time.
+4. The agent pulls the new image and recreates the container. For compose containers it runs `docker compose pull` then `docker compose up -d`. For standalone containers it renames the old container, creates and starts the new one with the same configuration, and only then removes the old one; if any step fails, the old container is restored.
+5. After an upgrade is triggered, the container is left alone for **10 minutes**. If an upgrade fails, the wait doubles with each consecutive failure (10 min, 20 min, 40 min, … up to 6 hours), so a container that can't upgrade isn't retried on every poll. A successful upgrade resets this.
 
 ### Important notes
 
 - Auto-update only applies to **running** containers. A stopped container will not be started or upgraded automatically.
 - Toggles are saved to `/var/lib/sddb/config.json` and survive dashboard restarts.
-- The 10-minute cooldown is in-memory — restarting the dashboard clears all cooldown timers.
+- Cooldowns and failure backoff are in-memory — restarting the dashboard clears them.
 - Registries that require authentication (private registries) are not supported for update checks. The container will never show **update available** and auto-update will not fire.
 
 ### Docker Hub rate limiting
@@ -518,7 +519,7 @@ Docker Hub limits unauthenticated image pulls to **100 pulls per 6 hours** per I
 toomanyrequests: You have reached your unauthenticated pull rate limit
 ```
 
-When this happens the dashboard automatically backs off for **1 hour** before retrying, rather than hammering the registry every 10 minutes.
+When this happens the dashboard backs off for at least **1 hour** before retrying, rather than hammering the registry.
 
 The permanent fix is to authenticate Docker on each agent host:
 

@@ -445,7 +445,12 @@
         body: JSON.stringify({agent_addr: agentAddr, container_id: containerId, action}),
       });
       const data = await res.json();
-      if (data.success) {
+      if (data.success && data.pending) {
+        // Upgrades and pulls run in the background on the agent; the card
+        // shows progress and any failure.
+        showToast(`${action} started — this can take a few minutes`, true);
+        setTimeout(refreshDashboard, 2000);
+      } else if (data.success) {
         showToast(`${action} succeeded`, true);
         setTimeout(refreshDashboard, 2000);
       } else {
