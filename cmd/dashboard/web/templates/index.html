@@ -341,9 +341,12 @@
       setTimeout(() => t.remove(), 4000);
     }
 
+    // Re-fetch the server-rendered sidebar and cards now, rather than waiting
+    // for the next 6-second poll. (htmx treats "load" as a one-off trigger
+    // when an element first appears, so triggering it again did nothing.)
     function refreshDashboard() {
-      htmx.trigger('#sidebar-list', 'load');
-      htmx.trigger('#main-content', 'load');
+      htmx.ajax('GET', '/api/sidebar', {target: '#sidebar-list', swap: 'innerHTML'});
+      return htmx.ajax('GET', '/api/main', {target: '#main-content', swap: 'innerHTML'});
     }
 
     // ── Add agent ─────────────────────────────────────────────────────────────
