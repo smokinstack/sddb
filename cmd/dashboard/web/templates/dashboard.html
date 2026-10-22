@@ -236,6 +236,7 @@
 {{$c := .C}}
 {{$addr := .AgentAddr}}
 {{$job := .Job}}
+{{$prot := protected $c.Name}}
 <div class="bg-slate-950 border border-slate-800 rounded-lg card-hover flex flex-col" data-container-id="{{$c.ShortID}}">
 
   <!-- Card header — always visible, click to collapse -->
@@ -333,7 +334,9 @@
 
     <!-- Action buttons -->
     <div class="flex gap-2 pt-1 border-t border-slate-800/60">
-      {{if eq $c.State "running"}}
+      {{if $prot}}
+        {{/* Protected: no start/stop/restart/upgrade buttons (the server refuses them anyway) */}}
+      {{else if eq $c.State "running"}}
         <button onclick="containerAction('{{$addr}}','{{$c.ID}}','stop')"
           class="flex-1 py-1 text-xs text-slate-400 hover:text-red-400 hover:bg-red-500/10 rounded transition-colors">
           Stop
@@ -362,7 +365,12 @@
         title="Auto-update: off">
         Auto
       </button>
-      {{if and $c.UpdateAvailable (ne $job.State "running")}}
+      <button onclick="toggleProtected('{{$c.Name}}')"
+        class="px-2 py-1 text-xs rounded border transition-colors {{if $prot}}text-amber-400 border-amber-500/40 bg-amber-500/10{{else}}text-slate-600 border-slate-700{{end}}"
+        title="{{if $prot}}Protected: start, stop, restart and upgrade are disabled. Click to unprotect.{{else}}Protect: disable start, stop, restart and upgrade for this container{{end}}">
+        Lock
+      </button>
+      {{if and $c.UpdateAvailable (ne $job.State "running") (not $prot)}}
         <button onclick="containerAction('{{$addr}}','{{$c.ID}}','upgrade')"
           class="flex-1 py-1 text-xs text-amber-400 hover:text-amber-300 hover:bg-amber-500/10 rounded border border-amber-500/30 transition-colors font-medium">
           Upgrade

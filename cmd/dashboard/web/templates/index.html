@@ -596,6 +596,13 @@
       patchConfig({toggle_auto_update: {addr: agentAddr, name: containerName}});
     }
 
+    // Protection applies by container name on every host. The cards are
+    // rendered by the server, so refresh them to show the new state.
+    async function toggleProtected(containerName) {
+      await patchConfig({toggle_protected: containerName});
+      refreshDashboard();
+    }
+
     // ── Logs modal ────────────────────────────────────────────────────────────
 
     let _logsAgent = '', _logsContainer = '', _logsRaw = '', _logsImage = '';

@@ -607,6 +607,8 @@ When a host or the master toggle is muted, the dashboard still tracks container 
 | **Crash loop detected** | urgent | 2 or more crash events within 15 minutes |
 | **Container recovered** | low | Stable for 10 minutes after crash-loop suppression |
 | Clean stop (exit 0) | — | No alert — assumed intentional |
+| Stopped with SIGTERM (exit 143) | — | No alert — that's how `docker stop` asks a container to stop |
+| Killed (exit 137) within 2 minutes of a Stop, Restart or Upgrade from the dashboard | — | No alert — the stop timed out and Docker killed it. A 137 at any other time is still reported |
 
 ### Crash-loop suppression
 
@@ -822,4 +824,4 @@ The session cookie's `Secure` flag is set automatically based on whether the req
 - The ntfy topic URL is stored in `config.json` (mode `0600`). The topic name acts as a shared secret — use a long, random, hard-to-guess name.
 - `/var/lib/sddb` is created with mode `0700`. The config file is written with mode `0600`.
 - The agent service runs as a dedicated `sddb` user (member of the `docker` group) with `NoNewPrivileges` and a read-only filesystem outside `/etc/sddb`.
-- **Protected containers**: add container names to `protected_containers` in `config.json` to prevent them from being stopped, restarted, or upgraded via the dashboard. Useful for guarding infrastructure containers (e.g. your reverse proxy or the dashboard itself) against accidental or unauthorised actions.
+- **Protected containers**: click **Lock** on a container card to stop it being started, stopped, restarted or upgraded from the dashboard (including by auto-update); its Stop/Restart/Upgrade buttons are hidden while locked. Click again to unlock. Protection applies by container name on every host and is saved as `protected_containers` in `config.json`. Useful for guarding infrastructure containers (e.g. your reverse proxy or the dashboard itself) against accidental clicks.

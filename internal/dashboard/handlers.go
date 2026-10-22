@@ -11,6 +11,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -58,6 +59,9 @@ func NewDashboard(state *State, poller *Poller, webFS fs.FS, cfg Config) (*Dashb
 	tmpl, err := loadTemplates(webFS)
 	if err != nil {
 		return nil, err
+	}
+	if cfg.Cfg != nil {
+		tmpl.Funcs(template.FuncMap{"protected": cfg.Cfg.IsProtected})
 	}
 	d := &Dashboard{
 		state:     state,
@@ -324,12 +328,13 @@ func (d *Dashboard) handleConfig(w http.ResponseWriter, r *http.Request) {
 			providers = d.ai.AvailableProviders()
 		}
 		writeJSON(w, map[string]any{
-			"ai_provider":         cfg.AIProvider,
-			"auto_update":         cfg.AutoUpdate,
-			"available_providers": providers,
-			"ntfy_url":            cfg.NtfyURL,
-			"ntfy_disabled":       cfg.NtfyDisabled,
-			"ntfy_disabled_hosts": cfg.NtfyDisabledHosts,
+			"ai_provider":          cfg.AIProvider,
+			"auto_update":          cfg.AutoUpdate,
+			"available_providers":  providers,
+			"ntfy_url":             cfg.NtfyURL,
+			"ntfy_disabled":        cfg.NtfyDisabled,
+			"ntfy_disabled_hosts":  cfg.NtfyDisabledHosts,
+			"protected_containers": cfg.ProtectedContainers,
 		})
 
 	case http.MethodPatch:
@@ -342,6 +347,7 @@ func (d *Dashboard) handleConfig(w http.ResponseWriter, r *http.Request) {
 				Addr string `json:"addr"`
 				Name string `json:"name"`
 			} `json:"toggle_auto_update"`
+			ToggleProtected *string `json:"toggle_protected"` // container name
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "bad request", http.StatusBadRequest)
@@ -367,6 +373,14 @@ func (d *Dashboard) handleConfig(w http.ResponseWriter, r *http.Request) {
 				key := req.ToggleAutoUpdate.Addr + "::" + req.ToggleAutoUpdate.Name
 				c.AutoUpdate[key] = !c.AutoUpdate[key]
 			}
+			if req.ToggleProtected != nil && *req.ToggleProtected != "" {
+				name := *req.ToggleProtected
+				if i := slices.Index(c.ProtectedContainers, name); i >= 0 {
+					c.ProtectedContainers = slices.Delete(c.ProtectedContainers, i, i+1)
+				} else {
+					c.ProtectedContainers = append(c.ProtectedContainers, name)
+				}
+			}
 		}); err != nil {
 			http.Error(w, "save failed: "+err.Error(), http.StatusInternalServerError)
 			return
@@ -377,12 +391,13 @@ func (d *Dashboard) handleConfig(w http.ResponseWriter, r *http.Request) {
 			providers = d.ai.AvailableProviders()
 		}
 		writeJSON(w, map[string]any{
-			"ai_provider":         cfg.AIProvider,
-			"auto_update":         cfg.AutoUpdate,
-			"available_providers": providers,
-			"ntfy_url":            cfg.NtfyURL,
-			"ntfy_disabled":       cfg.NtfyDisabled,
-			"ntfy_disabled_hosts": cfg.NtfyDisabledHosts,
+			"ai_provider":          cfg.AIProvider,
+			"auto_update":          cfg.AutoUpdate,
+			"available_providers":  providers,
+			"ntfy_url":             cfg.NtfyURL,
+			"ntfy_disabled":        cfg.NtfyDisabled,
+			"ntfy_disabled_hosts":  cfg.NtfyDisabledHosts,
+			"protected_containers": cfg.ProtectedContainers,
 		})
 
 	default:
@@ -681,15 +696,18 @@ func (d *Dashboard) templateData(agents []*AgentRecord) TemplateAgentData {
 
 func loadTemplates(webFS fs.FS) (*template.Template, error) {
 	funcMap := template.FuncMap{
-		"formatBytes":       formatBytes,
-		"formatRate":        formatRate,
-		"formatPercent":     formatPercent,
-		"stateClass":        stateClass,
-		"stateBadge":        stateBadge,
-		"since":             since,
-		"sinceRFC":          sinceRFC,
-		"recentExit":        recentExit,
-		"add":               func(a, b int) int { return a + b },
+		"formatBytes":   formatBytes,
+		"formatRate":    formatRate,
+		"formatPercent": formatPercent,
+		"stateClass":    stateClass,
+		"stateBadge":    stateBadge,
+		"since":         since,
+		"sinceRFC":      sinceRFC,
+		"recentExit":    recentExit,
+		"add":           func(a, b int) int { return a + b },
+		// protected reports whether a container is exempt from start/stop/
+		// restart/upgrade; NewDashboard swaps in the real config lookup.
+		"protected":         func(string) bool { return false },
 		"itoa":              strconv.Itoa,
 		"cpuColor":          cpuColor,
 		"memColor":          memColor,
