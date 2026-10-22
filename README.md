@@ -36,7 +36,7 @@ Communication between the dashboard and agents is secured with mutual TLS (mTLS)
 
 ## Requirements
 
-- Docker running on each monitored host
+- Docker 19.03 or newer (Engine API 1.40+) running on each monitored host
 - `docker compose` plugin (or legacy `docker-compose`) on agent hosts if you use Compose
 
 ---

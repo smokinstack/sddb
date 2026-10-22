@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/moby/moby/client"
 	"github.com/smokinstack/sddb/internal/types"
 )
 
@@ -263,11 +264,12 @@ func (a *Agent) handleCommand(w http.ResponseWriter, r *http.Request) {
 // startJob starts an upgrade or pull of containerID in the background and
 // responds immediately. The outcome appears in StatsResponse.Jobs.
 func (a *Agent) startJob(ctx context.Context, w http.ResponseWriter, containerID, action string) {
-	info, err := a.docker.api.ContainerInspect(ctx, containerID)
+	res, err := a.docker.api.ContainerInspect(ctx, containerID, client.ContainerInspectOptions{})
 	if err != nil {
 		writeJSON(w, types.CommandResponse{Success: false, Message: err.Error()})
 		return
 	}
+	info := res.Container
 	name := strings.TrimPrefix(info.Name, "/")
 	oldImageID := info.Image
 
