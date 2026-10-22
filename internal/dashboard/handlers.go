@@ -34,13 +34,15 @@ type Dashboard struct {
 	agentPort int
 	tlsConfig *tls.Config  // nil = plain HTTP to agents
 	agentHTTP *http.Client // shared client for logs/commands (see newAgentClient)
-	credsMu   sync.RWMutex
-	creds     *auth.Credentials
-	sessions  *auth.Sessions
-	limiter   *loginLimiter
-	dataDir   string
-	ai        *ai.Client
-	cfg       *config.Store
+	// extra origins allowed to make changes (SDDB_TRUSTED_ORIGINS; see origin.go)
+	trustedOrigins []string
+	credsMu        sync.RWMutex
+	creds          *auth.Credentials
+	sessions       *auth.Sessions
+	limiter        *loginLimiter
+	dataDir        string
+	ai             *ai.Client
+	cfg            *config.Store
 }
 
 // Config holds everything NewDashboard needs.
@@ -75,6 +77,7 @@ func NewDashboard(state *State, poller *Poller, notify chan struct{}, webFS fs.F
 		cfg:       cfg.Cfg,
 	}
 	d.limiter = newLoginLimiter()
+	d.trustedOrigins = trustedOriginsFromEnv()
 	return d, nil
 }
 
@@ -103,7 +106,7 @@ func (d *Dashboard) Handler() http.Handler {
 	mux.HandleFunc("/api/ntfy/test", d.handleNtfyTest)
 	mux.HandleFunc("/events", d.handleSSE)
 
-	return d.requireAuth(mux)
+	return d.sameOrigin(d.requireAuth(mux))
 }
 
 func isSecure(r *http.Request) bool {
