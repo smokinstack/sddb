@@ -184,10 +184,10 @@ func (d *DockerClient) fillStats(ctx context.Context, state *types.ContainerStat
 	if prev, ok := d.prevStats[state.ID]; ok {
 		elapsed := now.Sub(prev.timestamp).Seconds()
 		if elapsed > 0 {
-			state.NetRxRate = float64(rxBytes-prev.netRxBytes) / elapsed
-			state.NetTxRate = float64(txBytes-prev.netTxBytes) / elapsed
-			state.BlockReadRate = float64(blockRead-prev.blockRead) / elapsed
-			state.BlockWriteRate = float64(blockWrite-prev.blockWrite) / elapsed
+			state.NetRxRate = counterRate(rxBytes, prev.netRxBytes, elapsed)
+			state.NetTxRate = counterRate(txBytes, prev.netTxBytes, elapsed)
+			state.BlockReadRate = counterRate(blockRead, prev.blockRead, elapsed)
+			state.BlockWriteRate = counterRate(blockWrite, prev.blockWrite, elapsed)
 		}
 	}
 	d.prevStats[state.ID] = prevNetStats{
@@ -200,6 +200,18 @@ func (d *DockerClient) fillStats(ctx context.Context, state *types.ContainerStat
 	d.prevMu.Unlock()
 
 	return nil
+}
+
+// counterRate returns the per-second rate between two samples of a cumulative
+// counter. Counters reset to zero when a container restarts; subtracting the
+// larger previous value from an unsigned counter would wrap around to ~1.8e19
+// and show as an absurd spike (also in the host's Net total), so a reset
+// reports 0 for that one sample instead.
+func counterRate(cur, prev uint64, seconds float64) float64 {
+	if cur < prev || seconds <= 0 {
+		return 0
+	}
+	return float64(cur-prev) / seconds
 }
 
 // StartContainer starts a stopped container.
