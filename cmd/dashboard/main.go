@@ -286,8 +286,7 @@ func runDashboard() {
 
 	persistPath := filepath.Join(*dataDir, "agents.json")
 	state := dashboard.NewState(persistPath)
-	notify := make(chan struct{}, 16)
-	poller := dashboard.NewPoller(state, *pollInterval, notify, dashCfg.TLS, cfg)
+	poller := dashboard.NewPoller(state, *pollInterval, dashCfg.TLS, cfg)
 
 	dashCfg.Cfg = cfg
 
@@ -296,7 +295,7 @@ func runDashboard() {
 		log.Fatalf("embed: %v", err)
 	}
 
-	dash, err := dashboard.NewDashboard(state, poller, notify, webFS, dashCfg)
+	dash, err := dashboard.NewDashboard(state, poller, webFS, dashCfg)
 	if err != nil {
 		log.Fatalf("dashboard: %v", err)
 	}

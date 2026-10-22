@@ -1,7 +1,6 @@
 package dashboard
 
 import (
-	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -28,7 +27,6 @@ import (
 type Dashboard struct {
 	state     *State
 	poller    *Poller
-	notify    chan struct{}
 	tmpl      *template.Template
 	webFS     fs.FS
 	agentPort int
@@ -56,7 +54,7 @@ type Config struct {
 	Cfg       *config.Store
 }
 
-func NewDashboard(state *State, poller *Poller, notify chan struct{}, webFS fs.FS, cfg Config) (*Dashboard, error) {
+func NewDashboard(state *State, poller *Poller, webFS fs.FS, cfg Config) (*Dashboard, error) {
 	tmpl, err := loadTemplates(webFS)
 	if err != nil {
 		return nil, err
@@ -64,7 +62,6 @@ func NewDashboard(state *State, poller *Poller, notify chan struct{}, webFS fs.F
 	d := &Dashboard{
 		state:     state,
 		poller:    poller,
-		notify:    notify,
 		tmpl:      tmpl,
 		webFS:     webFS,
 		agentPort: cfg.AgentPort,
@@ -104,7 +101,6 @@ func (d *Dashboard) Handler() http.Handler {
 	mux.HandleFunc("/api/ai", d.handleAI)
 	mux.HandleFunc("/api/config", d.handleConfig)
 	mux.HandleFunc("/api/ntfy/test", d.handleNtfyTest)
-	mux.HandleFunc("/events", d.handleSSE)
 
 	return d.sameOrigin(d.requireAuth(mux))
 }
@@ -664,44 +660,6 @@ func (d *Dashboard) handleCommand(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(time.Second)
 		d.poller.PollNow(context.Background(), req.AgentAddr)
 	}()
-}
-
-// handleSSE pushes a "refresh" event to connected browsers whenever new stats arrive.
-func (d *Dashboard) handleSSE(w http.ResponseWriter, r *http.Request) {
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-
-	// Send an initial ping
-	fmt.Fprintf(w, "event: connected\ndata: ok\n\n")
-	flusher.Flush()
-
-	for {
-		select {
-		case <-r.Context().Done():
-			return
-		case <-d.notify:
-			// Render the dashboard fragment and send it as an SSE event
-			var buf bytes.Buffer
-			if err := d.tmpl.ExecuteTemplate(&buf, "dashboard.html", d.templateData(d.state.All())); err != nil {
-				log.Printf("SSE template error: %v", err)
-				continue
-			}
-			// SSE data cannot contain raw newlines — encode as a series of "data:" lines
-			lines := strings.Split(buf.String(), "\n")
-			for _, line := range lines {
-				fmt.Fprintf(w, "data: %s\n", line)
-			}
-			fmt.Fprintf(w, "\n")
-			flusher.Flush()
-		}
-	}
 }
 
 // TemplateAgentData is passed to dashboard templates.

@@ -42,7 +42,7 @@ func autoPoller(t *testing.T, addr string) (*Poller, *time.Time) {
 	cfg.Update(func(c *config.Config) { c.AutoUpdate[addr+"::web"] = true })
 	state := NewState("")
 	state.AddAgent(addr, "")
-	p := NewPoller(state, time.Hour, make(chan struct{}, 16), nil, cfg)
+	p := NewPoller(state, time.Hour, nil, cfg)
 	now := time.Unix(1_700_000_000, 0)
 	p.now = func() time.Time { return now }
 	return p, &now

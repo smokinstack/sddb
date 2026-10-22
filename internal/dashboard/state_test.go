@@ -40,12 +40,10 @@ func newTestDashboard(t *testing.T, agentAddr string) *Dashboard {
 	}
 	state := NewState("")
 	state.AddAgent(agentAddr, "")
-	notify := make(chan struct{}, 1)
-	poller := NewPoller(state, time.Hour, notify, nil, cfg)
+	poller := NewPoller(state, time.Hour, nil, cfg)
 	return &Dashboard{
 		state:     state,
 		poller:    poller,
-		notify:    notify,
 		cfg:       cfg,
 		agentHTTP: newAgentClient(nil),
 		limiter:   newLoginLimiter(),

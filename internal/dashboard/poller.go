@@ -20,8 +20,7 @@ import (
 type Poller struct {
 	state     *State
 	interval  time.Duration
-	notify    chan struct{} // written to on every successful poll
-	tlsConfig *tls.Config   // nil → plain HTTP
+	tlsConfig *tls.Config // nil → plain HTTP
 	cfg       *config.Store
 
 	// Shared HTTP clients — reused across all requests so connections are
@@ -78,12 +77,11 @@ func failureBackoff(failures int, errMsg string) time.Duration {
 	return d
 }
 
-func NewPoller(state *State, interval time.Duration, notify chan struct{}, tlsConfig *tls.Config, cfg *config.Store) *Poller {
+func NewPoller(state *State, interval time.Duration, tlsConfig *tls.Config, cfg *config.Store) *Poller {
 	transport := newAgentTransport(tlsConfig)
 	return &Poller{
 		state:      state,
 		interval:   interval,
-		notify:     notify,
 		tlsConfig:  tlsConfig,
 		cfg:        cfg,
 		pollClient: &http.Client{Timeout: 10 * time.Second, Transport: transport},
@@ -128,10 +126,6 @@ func (p *Poller) pollOne(ctx context.Context, addr string) {
 	}
 	p.state.UpdateFromPoll(addr, resp)
 	p.notifier.Check(addr, resp.Containers)
-	select {
-	case p.notify <- struct{}{}:
-	default:
-	}
 	go p.runAutoUpdates(addr, resp.Containers, resp.Jobs)
 }
 
