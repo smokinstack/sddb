@@ -20,7 +20,7 @@ func TestDashboardTemplateShowsJobStatus(t *testing.T) {
 
 	agent := &AgentRecord{ID: "a1", Addr: "h:8484", Online: true, LastSeen: time.Now(),
 		LastStats: types.StatsResponse{
-			Agent: types.AgentInfo{Hostname: "plexmon"},
+			Agent: types.AgentInfo{Hostname: "plexmon", Version: "v0.1.0-42-gabc1234"},
 			Host:  types.HostStats{MemTotal: 1},
 			Containers: []types.ContainerState{
 				{ID: "1", ShortID: "1", Name: "upgrading", State: "running", UpdateAvailable: true},
@@ -44,7 +44,7 @@ func TestDashboardTemplateShowsJobStatus(t *testing.T) {
 	}
 	out := buf.String()
 
-	for _, want := range []string{"Upgrading…", "Upgrade failed: compose pull: unauthorized"} {
+	for _, want := range []string{"Upgrading…", "Upgrade failed: compose pull: unauthorized", ">v0.1.0-42-gabc1234</span>"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("rendered dashboard missing %q", want)
 		}
