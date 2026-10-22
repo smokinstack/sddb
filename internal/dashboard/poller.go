@@ -31,6 +31,7 @@ type Poller struct {
 
 	upgradeMu sync.Mutex
 	auto      map[string]*autoUpdateState // "addr::name" → auto-update bookkeeping
+	inFlight  map[string]*inFlightUpgrade // addr → auto-upgrade started, not yet seen finished
 	now       func() time.Time            // clock; overridable in tests
 
 	notifier *Notifier
@@ -45,6 +46,20 @@ const (
 	maxAutoBackoff   = 6 * time.Hour
 	rateLimitBackoff = time.Hour
 )
+
+// inFlightTimeout bounds how long an agent counts as busy with an
+// auto-upgrade whose job never shows up (e.g. the agent restarted and lost
+// it). It is longer than the agent's own job timeout.
+const inFlightTimeout = 25 * time.Minute
+
+// inFlightUpgrade is the auto-upgrade the dashboard last started on an agent.
+// Upgrades on one agent run one at a time, so several containers don't all
+// pull at once and trip registry burst limits.
+type inFlightUpgrade struct {
+	name         string    // container being upgraded
+	since        time.Time // when the dashboard started it
+	prevFinished int64     // that container's last job Finished time before this one
+}
 
 type autoUpdateState struct {
 	next         time.Time // no new attempt before this
@@ -77,6 +92,7 @@ func NewPoller(state *State, interval time.Duration, notify chan struct{}, tlsCo
 		// synchronously, where giving up early would kill the upgrade.
 		upgradeClient: &http.Client{Timeout: 15 * time.Minute, Transport: transport},
 		auto:          make(map[string]*autoUpdateState),
+		inFlight:      make(map[string]*inFlightUpgrade),
 		now:           time.Now,
 		notifier:      newNotifier(cfg),
 	}
@@ -122,7 +138,14 @@ func (p *Poller) pollOne(ctx context.Context, addr string) {
 // runAutoUpdates upgrades any container that has auto-update enabled and an
 // update available. Upgrades run as background jobs on the agent; their
 // outcome comes back in later polls via jobs.
+//
+// At most one upgrade runs per agent: nothing new starts while any upgrade
+// job is running there (including manual ones), or while the one this
+// dashboard started hasn't been seen to finish yet.
 func (p *Poller) runAutoUpdates(addr string, containers []types.ContainerState, jobs map[string]types.JobStatus) {
+	if p.agentBusy(addr, jobs) {
+		return
+	}
 	for _, c := range containers {
 		if !c.UpdateAvailable || c.State != "running" {
 			continue
@@ -165,12 +188,20 @@ func (p *Poller) runAutoUpdates(addr string, containers []types.ContainerState, 
 			p.upgradeMu.Unlock()
 			continue
 		}
-		st.next = now.Add(autoCooldown) // claim the slot before releasing the lock
+		if p.inFlight[addr] != nil {
+			// Another poll's run claimed this agent meanwhile.
+			p.upgradeMu.Unlock()
+			return
+		}
+		st.next = now.Add(autoCooldown)                                                                    // claim the container …
+		p.inFlight[addr] = &inFlightUpgrade{name: c.Name, since: now, prevFinished: jobs[c.Name].Finished} // … and the agent
 		p.upgradeMu.Unlock()
 
 		log.Printf("auto-update: upgrading %s on %s", c.Name, addr)
-		if err := p.sendUpgrade(addr, c.ID); err != nil {
+		pending, err := p.sendUpgrade(addr, c.ID)
+		if err != nil {
 			p.upgradeMu.Lock()
+			delete(p.inFlight, addr)
 			st.failures++
 			wait := failureBackoff(st.failures, err.Error())
 			st.next = now.Add(wait)
@@ -178,38 +209,78 @@ func (p *Poller) runAutoUpdates(addr string, containers []types.ContainerState, 
 			log.Printf("auto-update: could not start upgrade of %s on %s, next try in %s: %v", c.Name, addr, wait, err)
 			continue
 		}
+		if !pending {
+			// Older agents upgrade synchronously: it has already finished,
+			// so the agent is free for the next one.
+			p.upgradeMu.Lock()
+			delete(p.inFlight, addr)
+			p.upgradeMu.Unlock()
+			continue
+		}
 		// Re-poll after a short delay so the dashboard shows the running job.
 		go func(a string) {
 			time.Sleep(3 * time.Second)
 			p.PollNow(context.Background(), a)
 		}(addr)
+		return // one upgrade per agent at a time
 	}
 }
 
-// sendUpgrade asks the agent to start an upgrade job.
-func (p *Poller) sendUpgrade(addr, containerID string) error {
+// agentBusy reports whether an upgrade is running on addr, either seen in the
+// agent's jobs or started by this dashboard and not yet seen to finish.
+func (p *Poller) agentBusy(addr string, jobs map[string]types.JobStatus) bool {
+	for _, j := range jobs {
+		if j.Action == "upgrade" && j.State == types.JobRunning {
+			return true
+		}
+	}
+
+	p.upgradeMu.Lock()
+	defer p.upgradeMu.Unlock()
+	f := p.inFlight[addr]
+	if f == nil {
+		return false
+	}
+	// Finished compares agent timestamps with agent timestamps, so clock
+	// differences between hosts don't matter.
+	if j, ok := jobs[f.name]; ok && j.State != types.JobRunning && j.Finished > f.prevFinished {
+		delete(p.inFlight, addr)
+		return false
+	}
+	if p.now().Sub(f.since) > inFlightTimeout {
+		log.Printf("auto-update: no result seen for %s on %s after %s; allowing further upgrades", f.name, addr, inFlightTimeout)
+		delete(p.inFlight, addr)
+		return false
+	}
+	return true
+}
+
+// sendUpgrade asks the agent to start an upgrade. pending is true when the
+// agent runs it as a background job (current agents); older agents only
+// answer once the upgrade has finished.
+func (p *Poller) sendUpgrade(addr, containerID string) (pending bool, err error) {
 	url := fmt.Sprintf("%s://%s/api/containers/%s/upgrade", agentScheme(p.tlsConfig), addr, containerID)
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, url, nil)
 	if err != nil {
-		return err
+		return false, err
 	}
 	resp, err := p.upgradeClient.Do(req)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("agent returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return false, fmt.Errorf("agent returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 	var cr types.CommandResponse
 	if err := json.Unmarshal(body, &cr); err != nil {
-		return fmt.Errorf("decode agent response: %w", err)
+		return false, fmt.Errorf("decode agent response: %w", err)
 	}
 	if !cr.Success {
-		return fmt.Errorf("agent refused upgrade: %s", cr.Message)
+		return false, fmt.Errorf("agent refused upgrade: %s", cr.Message)
 	}
-	return nil
+	return cr.Pending, nil
 }
 
 // PollNow immediately polls a single agent address.
