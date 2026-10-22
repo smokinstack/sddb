@@ -192,6 +192,7 @@ func (p *Poller) runAutoUpdates(addr string, containers []types.ContainerState, 
 		p.upgradeMu.Unlock()
 
 		log.Printf("auto-update: upgrading %s on %s", c.Name, addr)
+		p.notifier.ExpectStop(addr, c.Name)
 		pending, err := p.sendUpgrade(addr, c.ID)
 		if err != nil {
 			p.upgradeMu.Lock()

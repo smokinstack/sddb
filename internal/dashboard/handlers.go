@@ -639,6 +639,10 @@ func (d *Dashboard) handleCommand(w http.ResponseWriter, r *http.Request) {
 	if req.Action == "upgrade" || req.Action == "pull" {
 		timeout = 15 * time.Minute
 	}
+	if req.Action == "stop" || req.Action == "restart" || req.Action == "upgrade" {
+		d.poller.notifier.ExpectStop(req.AgentAddr, match.Name)
+	}
+
 	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
 	target := fmt.Sprintf("%s://%s/api/containers/%s/%s", agentScheme(d.tlsConfig), req.AgentAddr, url.PathEscape(match.ID), req.Action)
