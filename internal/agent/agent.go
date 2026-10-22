@@ -106,13 +106,13 @@ func (a *Agent) Run(ctx context.Context) error {
 	}()
 
 	if a.cfg.TLS != nil {
-		log.Printf("agent %s listening on %s (TLS, interval %s)", a.cfg.ID, a.cfg.ListenAddr, a.cfg.UpdateInterval)
+		log.Printf("sddb-agent %s (id %s) listening on %s (TLS, interval %s)", a.cfg.Version, a.cfg.ID, a.cfg.ListenAddr, a.cfg.UpdateInterval)
 		// Cert and key are already embedded in TLSConfig via tls.X509KeyPair
 		if err := srv.ListenAndServeTLS("", ""); err != http.ErrServerClosed {
 			return err
 		}
 	} else {
-		log.Printf("agent %s listening on %s (interval %s)", a.cfg.ID, a.cfg.ListenAddr, a.cfg.UpdateInterval)
+		log.Printf("sddb-agent %s (id %s) listening on %s (interval %s)", a.cfg.Version, a.cfg.ID, a.cfg.ListenAddr, a.cfg.UpdateInterval)
 		if err := srv.ListenAndServe(); err != http.ErrServerClosed {
 			return err
 		}
