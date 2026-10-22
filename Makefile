@@ -1,6 +1,6 @@
 .PHONY: all agent dashboard build linux linux-arm64 release clean install \
         install-agent-service install-dashboard-service install-service enroll \
-        run-agent run-dashboard
+        run-agent run-dashboard css
 
 VERSION   ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS   := -ldflags "-X main.version=$(VERSION)"
@@ -54,6 +54,13 @@ install: build
 
 clean:
 	rm -rf bin/
+
+# Rebuild the dashboard's CSS after adding or changing Tailwind classes in the
+# templates or in internal/dashboard (needs Node.js; CI checks it's current).
+TAILWIND_VERSION := 3.4.19
+css:
+	npx --yes tailwindcss@$(TAILWIND_VERSION) -c tailwind.config.js \
+		-i cmd/dashboard/tailwind.input.css -o cmd/dashboard/web/static/app.css --minify
 
 run-agent:
 	go run ./cmd/agent -addr :8484 -interval 5s

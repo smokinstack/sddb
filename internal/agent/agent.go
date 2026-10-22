@@ -42,6 +42,13 @@ type Agent struct {
 	// Background upgrades and pulls, keyed by container name.
 	jobs      *jobTracker
 	onJobDone func() // runs after each job; refreshes stats (overridable in tests)
+
+	// Registry update checks (see updates.go). Function fields so tests can
+	// replace Docker and the registry.
+	kickUpdates   chan struct{}
+	now           func() time.Time
+	repoDigests   func(ctx context.Context, imageID string) ([]string, error)
+	checkRegistry func(ctx context.Context, imageName string, repoDigests []string) (bool, error)
 }
 
 type updateEntry struct {
@@ -56,8 +63,15 @@ func New(cfg Config, docker *DockerClient) *Agent {
 		host:        &hostSampler{},
 		updateCache: make(map[string]updateEntry),
 		jobs:        newJobTracker(),
+		kickUpdates: make(chan struct{}, 1),
+		now:         time.Now,
 	}
-	a.onJobDone = func() { a.refresh(context.Background()) }
+	a.repoDigests = a.dockerRepoDigests
+	a.checkRegistry = CheckUpdateAvailable
+	a.onJobDone = func() {
+		a.refresh(context.Background())
+		a.kickUpdateCheck() // the upgraded container's new image hasn't been checked yet
+	}
 	return a
 }
 
@@ -70,6 +84,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	}
 
 	go a.refreshLoop(ctx)
+	go a.updateCheckLoop(ctx)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/info", a.handleInfo)
@@ -126,10 +141,10 @@ func (a *Agent) refresh(ctx context.Context) error {
 		return err
 	}
 
-	// Check image updates (rate-limited: once per 5 minutes per image)
+	// Update status comes from the background checker's cache; refresh never
+	// waits on a registry.
 	for i := range containers {
-		c := &containers[i]
-		c.UpdateAvailable = a.checkUpdate(ctx, c.Image, c.ImageID)
+		containers[i].UpdateAvailable = a.updateAvailable(containers[i].ImageID)
 	}
 
 	hostname := getHostname()
@@ -151,37 +166,6 @@ func (a *Agent) refresh(ctx context.Context) error {
 	a.lastUpdate = time.Now()
 	a.mu.Unlock()
 	return nil
-}
-
-func (a *Agent) checkUpdate(ctx context.Context, imageName, imageID string) bool {
-	const updateCheckInterval = 5 * time.Minute
-
-	a.updateCacheMu.Lock()
-	entry, ok := a.updateCache[imageID]
-	a.updateCacheMu.Unlock()
-
-	if ok && time.Since(entry.checkedAt) < updateCheckInterval {
-		return entry.available
-	}
-
-	// Fetch RepoDigests for this image
-	imgInfo, _, err := a.docker.cli.ImageInspectWithRaw(ctx, imageID)
-	if err != nil {
-		return false
-	}
-
-	available, err := CheckUpdateAvailable(ctx, imageName, imgInfo.RepoDigests)
-	if err != nil {
-		log.Printf("update check %s: %v", imageName, err)
-	} else {
-		log.Printf("update check %s: available=%v repoDigests=%v", imageName, available, imgInfo.RepoDigests)
-	}
-
-	a.updateCacheMu.Lock()
-	a.updateCache[imageID] = updateEntry{available: available, checkedAt: time.Now()}
-	a.updateCacheMu.Unlock()
-
-	return available
 }
 
 // handleInfo returns static agent information.
