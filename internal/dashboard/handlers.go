@@ -240,25 +240,30 @@ func (d *Dashboard) handleSidebarFragment(w http.ResponseWriter, r *http.Request
 func (d *Dashboard) handleLogs(w http.ResponseWriter, r *http.Request) {
 	agentAddr := r.URL.Query().Get("agent")
 	containerID := r.URL.Query().Get("container")
-	tail := r.URL.Query().Get("tail")
 	if agentAddr == "" || containerID == "" {
 		http.Error(w, "agent and container required", http.StatusBadRequest)
 		return
 	}
-	if tail == "" {
-		tail = "100"
-	}
+	tail := types.LogTail(r.URL.Query().Get("tail"))
 
 	// Validate agent address is a registered agent to prevent SSRF.
-	if _, ok := d.state.Get(agentAddr); !ok {
+	agent, ok := d.state.Get(agentAddr)
+	if !ok {
 		http.Error(w, "unknown agent", http.StatusBadRequest)
+		return
+	}
+	// Only containers the agent reported, like commands; the ID used in the
+	// agent URL then comes from the agent, not from the request.
+	match := findContainer(agent.LastStats.Containers, containerID)
+	if match == nil {
+		http.Error(w, "unknown container", http.StatusBadRequest)
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	url := fmt.Sprintf("%s://%s/api/containers/%s/logs?tail=%s", agentScheme(d.tlsConfig), agentAddr, containerID, tail)
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	target := fmt.Sprintf("%s://%s/api/containers/%s/logs?tail=%d", agentScheme(d.tlsConfig), agentAddr, url.PathEscape(match.ID), tail)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	resp, err := d.agentHTTP.Do(req)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
@@ -266,7 +271,7 @@ func (d *Dashboard) handleLogs(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	io.Copy(w, resp.Body)
+	io.Copy(w, io.LimitReader(resp.Body, types.MaxLogBytes))
 }
 
 func (d *Dashboard) handleNtfyTest(w http.ResponseWriter, r *http.Request) {
@@ -617,14 +622,7 @@ func (d *Dashboard) handleCommand(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Resolve container ID to a known container; fail closed if not found.
-	var match *types.ContainerState
-	for i := range agent.LastStats.Containers {
-		c := &agent.LastStats.Containers[i]
-		if c.ID == req.ContainerID || c.ShortID == req.ContainerID || c.Name == req.ContainerID {
-			match = c
-			break
-		}
-	}
+	match := findContainer(agent.LastStats.Containers, req.ContainerID)
 	if match == nil {
 		http.Error(w, "unknown container", http.StatusBadRequest)
 		return
@@ -643,8 +641,8 @@ func (d *Dashboard) handleCommand(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
-	url := fmt.Sprintf("%s://%s/api/containers/%s/%s", agentScheme(d.tlsConfig), req.AgentAddr, req.ContainerID, req.Action)
-	agentReq, _ := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
+	target := fmt.Sprintf("%s://%s/api/containers/%s/%s", agentScheme(d.tlsConfig), req.AgentAddr, url.PathEscape(match.ID), req.Action)
+	agentReq, _ := http.NewRequestWithContext(ctx, http.MethodPost, target, nil)
 	resp, err := d.agentHTTP.Do(agentReq)
 	if err != nil {
 		writeJSON(w, types.CommandResponse{Success: false, Message: err.Error()})
@@ -757,6 +755,17 @@ func filteredSorted(cs []types.ContainerState, running bool) []types.ContainerSt
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
+}
+
+// findContainer looks a container up by full ID, short ID or name.
+func findContainer(cs []types.ContainerState, ref string) *types.ContainerState {
+	for i := range cs {
+		c := &cs[i]
+		if c.ID == ref || c.ShortID == ref || c.Name == ref {
+			return c
+		}
+	}
+	return nil
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

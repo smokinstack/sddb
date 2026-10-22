@@ -1,5 +1,26 @@
 package types
 
+import "strconv"
+
+// Container log limits shared by the dashboard and agent.
+const (
+	DefaultLogTail = 100
+	MaxLogTail     = 5000    // most lines one request may ask for
+	MaxLogBytes    = 8 << 20 // most bytes returned, however long the lines are
+)
+
+// LogTail parses a requested number of log lines. Anything that isn't a
+// positive number (including Docker's "all") gets the default, and large
+// values are capped, so one request can't pull a container's entire log
+// into memory on both the agent and the dashboard.
+func LogTail(s string) int {
+	n, err := strconv.Atoi(s)
+	if err != nil || n <= 0 {
+		return DefaultLogTail
+	}
+	return min(n, MaxLogTail)
+}
+
 // AgentInfo is returned by the agent's /api/info endpoint.
 type AgentInfo struct {
 	ID             string `json:"id"`

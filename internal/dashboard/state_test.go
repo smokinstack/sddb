@@ -120,3 +120,37 @@ func TestStateGetReturnsIndependentCopy(t *testing.T) {
 		t.Fatal("unknown address should not be found")
 	}
 }
+
+func TestLogsRequestIsValidatedAndBounded(t *testing.T) {
+	var gotPath, gotTail string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotTail = r.URL.EscapedPath(), r.URL.Query().Get("tail")
+		w.Write([]byte("ok"))
+	}))
+	defer srv.Close()
+	addr := strings.TrimPrefix(srv.URL, "http://")
+	d := newTestDashboard(t, addr)
+	d.state.UpdateFromPoll(addr, statsWith("a", types.ContainerState{ID: "abc123full", ShortID: "abc123", Name: "web"}))
+
+	get := func(query string) int {
+		rec := httptest.NewRecorder()
+		d.handleLogs(rec, httptest.NewRequest(http.MethodGet, "/api/logs?agent="+addr+"&"+query, nil))
+		return rec.Code
+	}
+
+	if code := get("container=web&tail=all"); code != 200 || gotTail != "100" {
+		t.Errorf("tail=all: status %d, agent got tail=%q; want 200 and the default 100", code, gotTail)
+	}
+	if get("container=web&tail=999999"); gotTail != "5000" {
+		t.Errorf("huge tail reached the agent as %q, want capped at 5000", gotTail)
+	}
+	if get("container=web&tail=1%26x%3D1"); gotTail != "100" {
+		t.Errorf("tail with injected query reached the agent as %q", gotTail)
+	}
+	if get("container=web"); gotPath != "/api/containers/abc123full/logs" {
+		t.Errorf("agent path = %q, want the agent-reported ID", gotPath)
+	}
+	if code := get("container=../info%3Fx%3D"); code != http.StatusBadRequest {
+		t.Errorf("unknown/path-like container: status %d, want 400", code)
+	}
+}

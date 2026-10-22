@@ -292,11 +292,13 @@ func (d *DockerClient) GetLogs(ctx context.Context, containerID, tail string) (s
 	}
 	defer rc.Close()
 
+	// Cap the size: tail limits lines, but lines can be arbitrarily long.
+	limited := io.LimitReader(rc, types.MaxLogBytes)
 	var buf bytes.Buffer
 	if info.Config.Tty {
-		io.Copy(&buf, rc)
+		io.Copy(&buf, limited)
 	} else {
-		stdcopy.StdCopy(&buf, &buf, rc)
+		stdcopy.StdCopy(&buf, &buf, limited)
 	}
 	return buf.String(), nil
 }

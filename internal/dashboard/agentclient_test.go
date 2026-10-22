@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/smokinstack/sddb/internal/types"
 )
 
 // Repeated log/command requests must reuse connections. Previously every
@@ -27,6 +29,7 @@ func TestAgentRequestsReuseConnections(t *testing.T) {
 
 	addr := strings.TrimPrefix(srv.URL, "http://")
 	d := newTestDashboard(t, addr)
+	d.state.UpdateFromPoll(addr, statsWith("a", types.ContainerState{ID: "web-id", ShortID: "web-id", Name: "web"}))
 
 	const requests = 50
 	for i := 0; i < requests; i++ {
