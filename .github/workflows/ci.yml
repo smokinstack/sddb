@@ -22,6 +22,12 @@ jobs:
       - name: Test
         run: go test ./...
 
+      - name: Dashboard CSS is up to date
+        run: |
+          make css
+          git diff --exit-code -- cmd/dashboard/web/static/app.css || {
+            echo "::error::app.css is stale: run 'make css' and commit the result"; exit 1; }
+
       - name: govulncheck
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest

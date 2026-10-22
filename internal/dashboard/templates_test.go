@@ -3,6 +3,7 @@ package dashboard
 import (
 	"bytes"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -52,5 +53,30 @@ func TestDashboardTemplateShowsJobStatus(t *testing.T) {
 	// updates, one of which is mid-upgrade.
 	if n := strings.Count(out, "','upgrade')"); n != 2 {
 		t.Errorf("found %d Upgrade buttons, want 2", n)
+	}
+}
+
+// The page can stop and upgrade containers, so it must not run scripts or
+// load styles from third-party CDNs; everything is served from /static.
+func TestTemplatesLoadNoThirdPartyScripts(t *testing.T) {
+	files, err := filepath.Glob("../../cmd/dashboard/web/templates/*.html")
+	if err != nil || len(files) == 0 {
+		t.Fatalf("no templates found: %v", err)
+	}
+	for _, f := range files {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, bad := range []string{`<script src="http`, `<script src="//`, `<link rel="stylesheet" href="http`} {
+			if strings.Contains(string(b), bad) {
+				t.Errorf("%s loads an external resource (%s…)", filepath.Base(f), bad)
+			}
+		}
+	}
+	for _, asset := range []string{"app.css", "htmx.min.js"} {
+		if _, err := os.Stat("../../cmd/dashboard/web/static/" + asset); err != nil {
+			t.Errorf("missing static asset %s: %v", asset, err)
+		}
 	}
 }
