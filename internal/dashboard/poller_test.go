@@ -133,3 +133,80 @@ func TestFailureBackoff(t *testing.T) {
 		}
 	}
 }
+
+// Upgrades on one agent must run one at a time. Since upgrades became
+// background jobs, every eligible container used to start pulling at once,
+// which tripped registry burst limits (toomanyrequests on lscr.io).
+func TestAutoUpdateOneUpgradePerAgentAtATime(t *testing.T) {
+	agent, upgrades := upgradeAgent(t, true)
+	addr := strings.TrimPrefix(agent.URL, "http://")
+	p, now := autoPoller(t, addr)
+	p.cfg.Update(func(c *config.Config) { c.AutoUpdate[addr+"::db"] = true })
+
+	both := []types.ContainerState{
+		{ID: "c1", Name: "web", State: "running", UpdateAvailable: true},
+		{ID: "c2", Name: "db", State: "running", UpdateAvailable: true},
+	}
+
+	p.runAutoUpdates(addr, both, nil)
+	if n := upgrades.Load(); n != 1 {
+		t.Fatalf("first poll started %d upgrades, want 1", n)
+	}
+
+	// Next poll arrives before the agent's stats show the job (stats lag by
+	// up to one interval): still only one.
+	*now = now.Add(5 * time.Second)
+	p.runAutoUpdates(addr, both, nil)
+	if n := upgrades.Load(); n != 1 {
+		t.Fatalf("second upgrade started before the first was visible: %d", n)
+	}
+
+	// The job is running.
+	running := map[string]types.JobStatus{"web": {Action: "upgrade", State: types.JobRunning, Started: 100}}
+	*now = now.Add(time.Minute)
+	p.runAutoUpdates(addr, both, running)
+	if n := upgrades.Load(); n != 1 {
+		t.Fatalf("second upgrade started while the first was running: %d", n)
+	}
+
+	// It finishes; the next container may go.
+	done := map[string]types.JobStatus{"web": {Action: "upgrade", State: types.JobSucceeded, Started: 100, Finished: 200}}
+	*now = now.Add(time.Minute)
+	p.runAutoUpdates(addr, both, done)
+	if n := upgrades.Load(); n != 2 {
+		t.Fatalf("after the first finished, %d upgrades, want 2", n)
+	}
+}
+
+// A manual upgrade running on the agent also holds back auto-updates there.
+func TestAutoUpdateWaitsForManualUpgrade(t *testing.T) {
+	agent, upgrades := upgradeAgent(t, true)
+	addr := strings.TrimPrefix(agent.URL, "http://")
+	p, _ := autoPoller(t, addr)
+
+	manual := map[string]types.JobStatus{"plex": {Action: "upgrade", State: types.JobRunning}}
+	p.runAutoUpdates(addr, webWithUpdate, manual)
+	if n := upgrades.Load(); n != 0 {
+		t.Fatalf("auto-update started while another upgrade was running: %d", n)
+	}
+}
+
+// If the agent never reports the job (e.g. it restarted mid-upgrade and lost
+// it), the agent isn't blocked forever.
+func TestAutoUpdateInFlightExpires(t *testing.T) {
+	agent, upgrades := upgradeAgent(t, true)
+	addr := strings.TrimPrefix(agent.URL, "http://")
+	p, now := autoPoller(t, addr)
+	p.cfg.Update(func(c *config.Config) { c.AutoUpdate[addr+"::db"] = true })
+	both := []types.ContainerState{
+		{ID: "c1", Name: "web", State: "running", UpdateAvailable: true},
+		{ID: "c2", Name: "db", State: "running", UpdateAvailable: true},
+	}
+
+	p.runAutoUpdates(addr, both, nil)
+	*now = now.Add(inFlightTimeout + time.Minute)
+	p.runAutoUpdates(addr, both, nil)
+	if n := upgrades.Load(); n != 2 {
+		t.Fatalf("agent still blocked after the in-flight timeout: %d upgrades", n)
+	}
+}
