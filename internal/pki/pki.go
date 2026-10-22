@@ -8,10 +8,12 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"math/big"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 )
 
@@ -116,11 +118,26 @@ func loadCA(certPath, keyPath string) (*CA, error) {
 	return &CA{cert: cert, key: key, CertPEM: certPEM}, nil
 }
 
-// IssueCert signs a new certificate with the given common name.
-// The CN is also added as a DNS SAN so TLS hostname verification works.
-// Both server and client auth extended key usages are granted so the same
-// cert type works for the agent (server) and the dashboard (client).
-func (ca *CA) IssueCert(commonName string) (certPEM, keyPEM []byte, err error) {
+// IssueServerCert signs a certificate an agent uses to serve its API.
+// It is valid for TLS server authentication only, so it cannot be presented
+// as a client certificate to another agent.
+func (ca *CA) IssueServerCert(commonName string) (certPEM, keyPEM []byte, err error) {
+	return ca.issue(commonName, x509.ExtKeyUsageServerAuth)
+}
+
+// IssueClientCert signs the certificate the dashboard presents to agents.
+// It is valid for TLS client authentication only.
+func (ca *CA) IssueClientCert(commonName string) (certPEM, keyPEM []byte, err error) {
+	return ca.issue(commonName, x509.ExtKeyUsageClientAuth)
+}
+
+// issue signs a new certificate with the given common name and extended key
+// usages. The CN is also added as a DNS SAN so TLS hostname verification works.
+//
+// Certificates issued before this split carried both server and client auth.
+// Agents still accept those for the dashboard (see AgentServerTLS), so
+// existing installs keep working without re-enrolling.
+func (ca *CA) issue(commonName string, usages ...x509.ExtKeyUsage) (certPEM, keyPEM []byte, err error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return nil, nil, fmt.Errorf("generate key: %w", err)
@@ -138,7 +155,7 @@ func (ca *CA) IssueCert(commonName string) (certPEM, keyPEM []byte, err error) {
 		NotBefore:    time.Now().Add(-time.Minute),
 		NotAfter:     time.Now().Add(10 * 365 * 24 * time.Hour),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
+		ExtKeyUsage:  usages,
 	}
 
 	// key = child's new key (embedded in cert), ca.key = CA's signing key (signs the cert)
@@ -193,5 +210,24 @@ func AgentServerTLS(certPEM, keyPEM, caPEM []byte) (*tls.Config, error) {
 		ClientAuth:   tls.RequireAndVerifyClientCert,
 		ClientCAs:    caPool,
 		MinVersion:   tls.VersionTLS13,
+		// Being signed by the CA is not enough: every agent's certificate is
+		// signed by the same CA, and older ones also allow client auth. Only
+		// the dashboard's identity may call the agent API; otherwise a key
+		// copied from any one agent host could control every other agent.
+		VerifyConnection: verifyDashboardPeer,
 	}, nil
+}
+
+// verifyDashboardPeer rejects client certificates that are not the dashboard's.
+// It runs after the chain (CA signature, expiry, client-auth usage) has been
+// verified by crypto/tls.
+func verifyDashboardPeer(cs tls.ConnectionState) error {
+	if len(cs.PeerCertificates) == 0 {
+		return errors.New("no client certificate")
+	}
+	leaf := cs.PeerCertificates[0]
+	if leaf.Subject.CommonName == DashboardCN || slices.Contains(leaf.DNSNames, DashboardCN) {
+		return nil
+	}
+	return fmt.Errorf("client certificate %q is not the dashboard (%s)", leaf.Subject.CommonName, DashboardCN)
 }

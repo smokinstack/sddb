@@ -270,7 +270,9 @@ Replace `<label>` with a short name for the machine (e.g. `plexmon`, `shadow`). 
 | `<hostname>-agent.key` | Agent TLS private key |
 | `<hostname>-ca.crt` | Dashboard CA (agent uses this to verify the dashboard) |
 
-You only need to do this once per agent. Existing certificates are reused — re-running `enroll` with the same name is safe.
+You only need to do this once per agent. The CA and the dashboard's certificate are reused; re-running `enroll` issues a fresh agent certificate, and is safe.
+
+> **Certificate roles.** Agent certificates can only be used to serve the agent API, the dashboard's only to connect to agents, and agents accept connections only from a certificate named `sddb-dashboard`. So a key copied from one agent host can't be used to control your other agents. Certificates issued by older versions allowed both uses. They keep working with no action needed, but you can re-run `enroll` for each agent to replace them with server-only certificates.
 
 #### Step 2 — Copy files to the agent host
 
