@@ -41,8 +41,7 @@ func (h *hostSampler) sample(containers []types.ContainerState) types.HostStats 
 
 	var stat syscall.Statfs_t
 	if err := syscall.Statfs("/", &stat); err == nil {
-		hs.DiskTotal = stat.Blocks * uint64(stat.Bsize)
-		hs.DiskUsage = hs.DiskTotal - stat.Bfree*uint64(stat.Bsize)
+		hs.DiskUsage, hs.DiskTotal = diskUsage(stat.Blocks, stat.Bfree, stat.Bavail, uint64(stat.Bsize))
 	}
 
 	for _, c := range containers {
@@ -123,4 +122,13 @@ func readMemInfo() (memInfo, bool) {
 		}
 	}
 	return mi, found == 2
+}
+
+// diskUsage returns used bytes and the total usable by ordinary processes,
+// matching what `df` reports. ext4 reserves ~5% of blocks for root (free but
+// not available), so dividing by the raw block count under-reported usage:
+// the dashboard showed 90% while df showed 96%.
+func diskUsage(blocks, free, avail, blockSize uint64) (used, total uint64) {
+	used = (blocks - free) * blockSize
+	return used, used + avail*blockSize
 }

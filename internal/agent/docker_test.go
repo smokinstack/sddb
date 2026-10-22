@@ -20,3 +20,22 @@ func TestCounterRate(t *testing.T) {
 		}
 	}
 }
+
+func TestDiskUsageMatchesDf(t *testing.T) {
+	// udocker last night: df showed 98G size, 89G used, 4.4G avail, 96%.
+	const gib = 1 << 30
+	blocks, free, avail := uint64(98*gib/4096), uint64(9*gib/4096), uint64(44*gib/10/4096)
+	used, total := diskUsage(blocks, free, avail, 4096)
+	pct := float64(used) / float64(total) * 100
+	if pct < 95 || pct > 96 {
+		t.Fatalf("disk = %.1f%%, want ~95.3%% like df (old formula gave %.1f%%)", pct, float64(blocks-free)/float64(blocks)*100)
+	}
+}
+
+func TestForgetGoneContainers(t *testing.T) {
+	d := &DockerClient{prevStats: map[string]prevNetStats{"old": {}, "kept": {}}}
+	d.forgetGone(map[string]bool{"kept": true, "new": true})
+	if _, ok := d.prevStats["old"]; ok || len(d.prevStats) != 1 {
+		t.Fatalf("prevStats = %v, want only the container still present", d.prevStats)
+	}
+}

@@ -2,12 +2,15 @@ package dashboard
 
 import (
 	"bytes"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/smokinstack/sddb/internal/config"
 	"github.com/smokinstack/sddb/internal/types"
 )
 
@@ -78,5 +81,58 @@ func TestTemplatesLoadNoThirdPartyScripts(t *testing.T) {
 		if _, err := os.Stat("../../cmd/dashboard/web/static/" + asset); err != nil {
 			t.Errorf("missing static asset %s: %v", asset, err)
 		}
+	}
+}
+
+func TestProtectedContainersToggleAndRender(t *testing.T) {
+	cfg, err := config.Load(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := NewState("")
+	d, err := NewDashboard(state, NewPoller(state, time.Hour, nil, cfg), os.DirFS("../../cmd/dashboard/web"), Config{Cfg: cfg})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	toggle := func() {
+		rec := httptest.NewRecorder()
+		d.handleConfig(rec, httptest.NewRequest(http.MethodPatch, "/api/config", strings.NewReader(`{"toggle_protected":"db"}`)))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("toggle: status %d %s", rec.Code, rec.Body.String())
+		}
+	}
+	render := func() string {
+		agent := &AgentRecord{ID: "a", Addr: "h:8484", Online: true, LastStats: types.StatsResponse{
+			Host: types.HostStats{MemTotal: 1},
+			Containers: []types.ContainerState{
+				{ID: "db-id", ShortID: "db-id", Name: "db", State: "running", UpdateAvailable: true},
+				{ID: "web-id", ShortID: "web-id", Name: "web", State: "running"},
+			}}}
+		var buf bytes.Buffer
+		if err := d.tmpl.ExecuteTemplate(&buf, "dashboard.html", d.templateData([]*AgentRecord{agent})); err != nil {
+			t.Fatal(err)
+		}
+		return buf.String()
+	}
+
+	toggle()
+	if !cfg.IsProtected("db") {
+		t.Fatal("toggle_protected did not protect db")
+	}
+	out := render()
+	if strings.Contains(out, "'db-id','stop')") || strings.Contains(out, "'db-id','upgrade')") {
+		t.Error("protected container still shows Stop/Upgrade")
+	}
+	if !strings.Contains(out, "'web-id','stop')") {
+		t.Error("unprotected container lost its Stop button")
+	}
+	if !strings.Contains(out, "Protected: start, stop, restart and upgrade are disabled") {
+		t.Error("Lock button doesn't show the protected state")
+	}
+
+	toggle()
+	if cfg.IsProtected("db") || !strings.Contains(render(), "'db-id','stop')") {
+		t.Fatal("second toggle did not unprotect db")
 	}
 }

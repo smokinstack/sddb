@@ -54,14 +54,65 @@ type Notifier struct {
 	mu    sync.Mutex
 	state map[containerKey]*containerAlert
 	http  *http.Client
+
+	// expected holds containers the dashboard itself just stopped,
+	// restarted or upgraded: their exit is not a crash.
+	expected map[containerKey]time.Time
+	now      func() time.Time
+	// deliver sends a notification (async in production; replaced in tests).
+	deliver func(url, title, message, priority string)
 }
 
+// expectedStopWindow is how long after a dashboard action an exit is
+// treated as intentional.
+const expectedStopWindow = 2 * time.Minute
+
 func newNotifier(cfg *config.Store) *Notifier {
-	return &Notifier{
-		cfg:   cfg,
-		state: make(map[containerKey]*containerAlert),
-		http:  &http.Client{Timeout: 10 * time.Second},
+	n := &Notifier{
+		cfg:      cfg,
+		state:    make(map[containerKey]*containerAlert),
+		http:     &http.Client{Timeout: 10 * time.Second},
+		expected: make(map[containerKey]time.Time),
+		now:      time.Now,
 	}
+	n.deliver = func(url, title, message, priority string) { go n.send(url, title, message, priority) }
+	return n
+}
+
+// ExpectStop records that the dashboard is about to stop, restart or upgrade
+// a container, so the exit that follows isn't reported as a crash.
+func (n *Notifier) ExpectStop(agentAddr, name string) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	now := n.now()
+	for k, until := range n.expected {
+		if now.After(until) {
+			delete(n.expected, k)
+		}
+	}
+	n.expected[containerKey{agentAddr, name}] = now.Add(expectedStopWindow)
+}
+
+// intentionalExit reports whether an exit was a deliberate stop rather than a
+// crash. Caller holds n.mu.
+//
+// `docker stop` sends SIGTERM and, after the timeout, SIGKILL. A process that
+// doesn't handle SIGTERM exits 143 (128+15); that's a stop request, whoever
+// sent it, so it's never reported. 137 (SIGKILL) is ambiguous: it's also what
+// `docker kill` or the kernel produce, so it only counts as intentional right
+// after the dashboard itself stopped the container. OOM kills are flagged
+// separately and always reported.
+func (n *Notifier) intentionalExit(key containerKey, exitCode int) bool {
+	switch exitCode {
+	case 143:
+		return true
+	case 137:
+		until, ok := n.expected[key]
+		return ok && n.now().Before(until)
+	}
+	// Any other code is the process failing on its own, even right after a
+	// dashboard restart.
+	return false
 }
 
 func (n *Notifier) Check(agentAddr string, containers []types.ContainerState) {
@@ -107,7 +158,7 @@ func (n *Notifier) Check(agentAddr string, containers []types.ContainerState) {
 			a.status = statusNormal
 			a.crashTimes = nil
 			if ntfyURL != "" && !muted {
-				go n.send(ntfyURL,
+				n.deliver(ntfyURL,
 					fmt.Sprintf("Recovered: %s", c.Name),
 					fmt.Sprintf("Container has been stable for %s on %s.", recoveryDuration, agentAddr),
 					"low")
@@ -137,7 +188,7 @@ func (n *Notifier) Check(agentAddr string, containers []types.ContainerState) {
 				title = fmt.Sprintf("OOMKilled: %s", c.Name)
 				msg = fmt.Sprintf("OOM-killed on %s and stopped.", agentAddr)
 				priority = "high"
-			} else if c.ExitCode != 0 {
+			} else if c.ExitCode != 0 && !n.intentionalExit(key, c.ExitCode) {
 				isCrash = true
 				title = fmt.Sprintf("Crashed: %s", c.Name)
 				msg = fmt.Sprintf("Crashed on %s with exit %d.", agentAddr, c.ExitCode)
@@ -168,7 +219,7 @@ func (n *Notifier) Check(agentAddr string, containers []types.ContainerState) {
 		// Crash-loop check: N or more events within the window
 		if len(a.crashTimes) >= loopThreshold {
 			a.status = statusSuppressed
-			go n.send(ntfyURL,
+			n.deliver(ntfyURL,
 				fmt.Sprintf("Crash loop: %s", c.Name),
 				fmt.Sprintf("%s is crash-looping on %s (%d crashes in %s).\n"+
 					"Alerts suppressed until container is stable for %s.",
@@ -182,7 +233,7 @@ func (n *Notifier) Check(agentAddr string, containers []types.ContainerState) {
 			continue
 		}
 		a.lastAlert = now
-		go n.send(ntfyURL, title, msg, priority)
+		n.deliver(ntfyURL, title, msg, priority)
 	}
 }
 

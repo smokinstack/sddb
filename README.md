@@ -399,7 +399,9 @@ Each expanded container card has two AI buttons:
 - **Logs → Analyze** — opens the log viewer, fetches recent log output, sends it to the AI, and asks it to summarise errors, warnings, and anything unusual.
 - **Health** — sends the container name, image, and current state to the AI and asks it to assess whether the container appears healthy.
 
-The AI response is shown in a modal. No data is stored or logged — each request is a direct, one-shot API call from the dashboard server to the AI provider.
+The AI response is shown in a modal, which names the provider and model that handled it. No data is stored or logged by the dashboard — each request is a direct, one-shot API call from the dashboard server to the AI provider.
+
+> **Privacy:** **Analyze** sends up to the last 150 lines of the container's logs to the provider, and **Health** sends its name, image, ports and resource usage. With Claude or OpenAI that data leaves your network and is handled under that provider's data policy; logs can contain hostnames, IP addresses, usernames or tokens. Use Ollama to keep everything on your own hardware.
 
 ### Configuring providers
 
@@ -450,6 +452,8 @@ AI assistant enabled — Claude (Anthropic)
 | `OPENAI_API_KEY` | ChatGPT | Get from platform.openai.com |
 | `OLLAMA_BASE_URL` | Ollama | URL of your Ollama server, e.g. `http://192.168.1.50:11434` |
 | `OLLAMA_MODEL` | Ollama | Model name, e.g. `llama3.2`. Defaults to `llama3.2` if not set |
+| `ANTHROPIC_MODEL` | Claude | Model name. Defaults to `claude-sonnet-5-5` if not set |
+| `OPENAI_MODEL` | OpenAI | Model name. Defaults to `gpt-4o` if not set |
 
 ### Selecting a provider
 
@@ -607,6 +611,8 @@ When a host or the master toggle is muted, the dashboard still tracks container 
 | **Crash loop detected** | urgent | 2 or more crash events within 15 minutes |
 | **Container recovered** | low | Stable for 10 minutes after crash-loop suppression |
 | Clean stop (exit 0) | — | No alert — assumed intentional |
+| Stopped with SIGTERM (exit 143) | — | No alert — that's how `docker stop` asks a container to stop |
+| Killed (exit 137) within 2 minutes of a Stop, Restart or Upgrade from the dashboard | — | No alert — the stop timed out and Docker killed it. A 137 at any other time is still reported |
 
 ### Crash-loop suppression
 
@@ -651,6 +657,7 @@ sddb-dashboard enroll <name>     issue an mTLS certificate for an agent
 | `-poll` | `5s` | — | Agent poll interval |
 | `-agent-port` | `8484` | — | Default port for network scan and bare-IP adds |
 | `-data-dir` | `~/.sddb` | — | Data directory (PKI, config, agent list) |
+| — | — | `SDDB_TRUSTED_PROXIES` | Proxies whose `X-Forwarded-For` is trusted for login rate limiting, besides loopback: comma-separated IPs or CIDRs, e.g. `172.16.0.0/12` when Caddy runs in a container. See Security notes |
 | — | — | `SDDB_TRUSTED_ORIGINS` | Extra origins allowed to make changes, comma-separated (e.g. `https://sddb.example.com`). Only needed behind a reverse proxy that rewrites the `Host` header without setting `X-Forwarded-Host`; see Security notes |
 
 ### Agent flags
@@ -814,7 +821,7 @@ The session cookie's `Secure` flag is set automatically based on whether the req
 
 - The dashboard **will not start** without a configured admin account. Run `set-admin` before the first launch.
 - The agent **will not start** without TLS certificates. Run `enroll` on the dashboard host and copy the resulting cert files to each agent host before starting the agent service.
-- The login endpoint rate-limits by IP: **5 failed attempts within 15 minutes** triggers a 15-minute lockout. The counter resets on a successful login. Forwarded headers (`X-Forwarded-For`) are only trusted when the connection comes from loopback — direct connections always use the real remote IP.
+- The login endpoint rate-limits by IP: **5 failed attempts within 15 minutes** triggers a 15-minute lockout. The counter resets on a successful login. `X-Forwarded-For` is only believed when the connection comes from a trusted proxy — loopback, or an address listed in `SDDB_TRUSTED_PROXIES` — and is read from the right, so a client can't dodge the lockout by sending a fake address. Direct connections always use the real remote IP. **If Caddy (or another proxy) runs in its own container**, set `SDDB_TRUSTED_PROXIES` to the Docker network (e.g. `172.16.0.0/12`); otherwise every login appears to come from the proxy, and five wrong passwords from anyone lock everyone out.
 - The session cookie is `HttpOnly` and `SameSite=Strict`, and also `Secure` when the dashboard is reached over HTTPS (directly or via a proxy that sets `X-Forwarded-Proto: https`). Over plain HTTP the login and session travel unencrypted — fine on a trusted LAN; use Caddy (or another TLS proxy) when exposing the dashboard more widely.
 - Requests that change anything (POST, PATCH, DELETE) are rejected if a browser sent them from another origin. `SameSite=Strict` alone doesn't cover this: browsers treat every port on the same host as the same site, so another web app on the dashboard's host could otherwise act with your session. The dashboard's own address is recognised from the `Host` header or `X-Forwarded-Host`; if a reverse proxy rewrites `Host` without setting `X-Forwarded-Host` and actions fail with "cross-origin request blocked", list the public address in `SDDB_TRUSTED_ORIGINS`.
 - mTLS ensures only agents with certificates signed by your CA can communicate with the dashboard, and agents only accept requests from the dashboard's own certificate, so a key copied from one agent host can't control the others. Each agent host must be enrolled separately.
@@ -822,4 +829,4 @@ The session cookie's `Secure` flag is set automatically based on whether the req
 - The ntfy topic URL is stored in `config.json` (mode `0600`). The topic name acts as a shared secret — use a long, random, hard-to-guess name.
 - `/var/lib/sddb` is created with mode `0700`. The config file is written with mode `0600`.
 - The agent service runs as a dedicated `sddb` user (member of the `docker` group) with `NoNewPrivileges` and a read-only filesystem outside `/etc/sddb`.
-- **Protected containers**: add container names to `protected_containers` in `config.json` to prevent them from being stopped, restarted, or upgraded via the dashboard. Useful for guarding infrastructure containers (e.g. your reverse proxy or the dashboard itself) against accidental or unauthorised actions.
+- **Protected containers**: click **Lock** on a container card to stop it being started, stopped, restarted or upgraded from the dashboard (including by auto-update); its Stop/Restart/Upgrade buttons are hidden while locked. Click again to unlock. Protection applies by container name on every host and is saved as `protected_containers` in `config.json`. Useful for guarding infrastructure containers (e.g. your reverse proxy or the dashboard itself) against accidental clicks.

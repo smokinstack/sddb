@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -192,10 +193,7 @@ func (a *Agent) handleLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	containerID := parts[0]
-	tail := r.URL.Query().Get("tail")
-	if tail == "" {
-		tail = "100"
-	}
+	tail := strconv.Itoa(types.LogTail(r.URL.Query().Get("tail")))
 
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()

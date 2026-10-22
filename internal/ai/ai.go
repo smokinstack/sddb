@@ -5,130 +5,153 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"strings"
 	"time"
 )
+
+// Default models, overridable with ANTHROPIC_MODEL / OPENAI_MODEL /
+// OLLAMA_MODEL so a retired model name doesn't need a code change.
+const (
+	DefaultAnthropicModel = "claude-sonnet-5-5"
+	DefaultOpenAIModel    = "gpt-4o"
+	DefaultOllamaModel    = "llama3.2"
+)
+
+// Config holds the provider credentials and models (from the environment).
+type Config struct {
+	AnthropicKey   string
+	AnthropicModel string
+	OpenAIKey      string
+	OpenAIModel    string
+	OllamaURL      string // e.g. http://192.168.1.10:11434
+	OllamaModel    string
+}
 
 // Client calls Claude, OpenAI, or a local Ollama instance depending on what is configured.
 // Priority: Claude > OpenAI > Ollama.
 type Client struct {
-	anthropicKey string
-	openaiKey    string
-	ollamaURL    string // e.g. http://192.168.1.10:11434
-	ollamaModel  string // e.g. llama3.2
-	http         *http.Client
+	cfg  Config
+	http *http.Client
+
+	// API endpoints; overridable in tests.
+	anthropicURL string
+	openaiURL    string
 }
 
-func New(anthropicKey, openaiKey, ollamaURL, ollamaModel string) *Client {
-	if ollamaURL != "" && ollamaModel == "" {
-		ollamaModel = "llama3.2"
+func New(cfg Config) *Client {
+	if cfg.AnthropicModel == "" {
+		cfg.AnthropicModel = DefaultAnthropicModel
+	}
+	if cfg.OpenAIModel == "" {
+		cfg.OpenAIModel = DefaultOpenAIModel
+	}
+	if cfg.OllamaURL != "" && cfg.OllamaModel == "" {
+		cfg.OllamaModel = DefaultOllamaModel
 	}
 	return &Client{
-		anthropicKey: anthropicKey,
-		openaiKey:    openaiKey,
-		ollamaURL:    ollamaURL,
-		ollamaModel:  ollamaModel,
+		cfg:          cfg,
 		http:         &http.Client{Timeout: 5 * time.Minute},
+		anthropicURL: "https://api.anthropic.com/v1/messages",
+		openaiURL:    "https://api.openai.com/v1/chat/completions",
 	}
 }
 
 func (c *Client) Available() bool {
-	return c.anthropicKey != "" || c.openaiKey != "" || c.ollamaURL != ""
+	return c.cfg.AnthropicKey != "" || c.cfg.OpenAIKey != "" || c.cfg.OllamaURL != ""
 }
 
-// Provider returns a human-readable description of the active provider.
+// Provider returns a human-readable description of the default provider.
 func (c *Client) Provider() string {
-	switch {
-	case c.anthropicKey != "":
-		return "Claude (Anthropic)"
-	case c.openaiKey != "":
-		return "OpenAI"
-	case c.ollamaURL != "":
-		return fmt.Sprintf("Ollama model=%s url=%s", c.ollamaModel, c.ollamaURL)
-	default:
-		return "none"
+	if p := c.resolve(""); p != "" {
+		return c.label(p)
 	}
+	return "none"
 }
 
 // AvailableProviders returns the names of configured providers.
 func (c *Client) AvailableProviders() []string {
 	var out []string
-	if c.anthropicKey != "" {
+	if c.cfg.AnthropicKey != "" {
 		out = append(out, "claude")
 	}
-	if c.openaiKey != "" {
+	if c.cfg.OpenAIKey != "" {
 		out = append(out, "openai")
 	}
-	if c.ollamaURL != "" {
+	if c.cfg.OllamaURL != "" {
 		out = append(out, "ollama")
 	}
 	return out
 }
 
-func (c *Client) Ask(ctx context.Context, prompt string) (string, error) {
-	switch {
-	case c.anthropicKey != "":
-		return c.askClaude(ctx, prompt)
-	case c.openaiKey != "":
-		return c.askOpenAI(ctx, prompt)
-	default:
-		return c.askOllama(ctx, prompt)
+// resolve returns the provider that will handle a request: the preferred one
+// if it's configured, otherwise the first configured in priority order.
+func (c *Client) resolve(preferred string) string {
+	for _, p := range c.AvailableProviders() {
+		if p == preferred {
+			return p
+		}
 	}
+	if ps := c.AvailableProviders(); len(ps) > 0 {
+		return ps[0]
+	}
+	return ""
 }
 
-// AskWithProvider uses a specific provider, falling back to Ask if provider is empty or unconfigured.
-func (c *Client) AskWithProvider(ctx context.Context, prompt, provider string) (string, error) {
-	switch provider {
+// label describes a provider and model, e.g. "Claude (claude-sonnet-5-5)".
+// It's shown next to each result, so it's clear where the data was sent.
+func (c *Client) label(p string) string {
+	switch p {
 	case "claude":
-		if c.anthropicKey != "" {
-			return c.askClaude(ctx, prompt)
-		}
+		return fmt.Sprintf("Claude (%s)", c.cfg.AnthropicModel)
 	case "openai":
-		if c.openaiKey != "" {
-			return c.askOpenAI(ctx, prompt)
-		}
+		return fmt.Sprintf("OpenAI (%s)", c.cfg.OpenAIModel)
 	case "ollama":
-		if c.ollamaURL != "" {
-			return c.askOllama(ctx, prompt)
-		}
+		return fmt.Sprintf("Ollama (%s at %s)", c.cfg.OllamaModel, c.cfg.OllamaURL)
 	}
-	return c.Ask(ctx, prompt)
+	return "none"
+}
+
+// AskWithProvider sends prompt to the preferred provider (falling back to the
+// first configured one) and returns the answer and a label for the provider
+// that was actually used.
+func (c *Client) AskWithProvider(ctx context.Context, prompt, preferred string) (answer, usedProvider string, err error) {
+	p := c.resolve(preferred)
+	switch p {
+	case "claude":
+		answer, err = c.askClaude(ctx, prompt)
+	case "openai":
+		answer, err = c.askChat(ctx, "openai", c.openaiURL, c.cfg.OpenAIKey, c.cfg.OpenAIModel, prompt)
+	case "ollama":
+		answer, err = c.askChat(ctx, "ollama", strings.TrimRight(c.cfg.OllamaURL, "/")+"/v1/chat/completions", "", c.cfg.OllamaModel, prompt)
+	default:
+		return "", "", fmt.Errorf("no AI provider configured")
+	}
+	return answer, c.label(p), err
 }
 
 func (c *Client) askClaude(ctx context.Context, prompt string) (string, error) {
 	body, _ := json.Marshal(map[string]any{
-		"model":      "claude-sonnet-4-6",
+		"model":      c.cfg.AnthropicModel,
 		"max_tokens": 2048,
 		"messages":   []map[string]string{{"role": "user", "content": prompt}},
 	})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		"https://api.anthropic.com/v1/messages", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.anthropicURL, bytes.NewReader(body))
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("x-api-key", c.anthropicKey)
+	req.Header.Set("x-api-key", c.cfg.AnthropicKey)
 	req.Header.Set("anthropic-version", "2023-06-01")
 	req.Header.Set("content-type", "application/json")
-
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
 
 	var out struct {
 		Content []struct {
 			Text string `json:"text"`
 		} `json:"content"`
-		Error struct {
-			Message string `json:"message"`
-		} `json:"error"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := c.do(req, "claude", &out); err != nil {
 		return "", err
-	}
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("claude: %s", out.Error.Message)
 	}
 	if len(out.Content) == 0 {
 		return "", fmt.Errorf("claude: empty response")
@@ -136,24 +159,21 @@ func (c *Client) askClaude(ctx context.Context, prompt string) (string, error) {
 	return out.Content[0].Text, nil
 }
 
-func (c *Client) askOllama(ctx context.Context, prompt string) (string, error) {
+// askChat calls an OpenAI-compatible chat completions endpoint (OpenAI, Ollama).
+func (c *Client) askChat(ctx context.Context, name, url, key, model, prompt string) (string, error) {
 	body, _ := json.Marshal(map[string]any{
-		"model":    c.ollamaModel,
+		"model":    model,
 		"messages": []map[string]string{{"role": "user", "content": prompt}},
 		"stream":   false,
 	})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		c.ollamaURL+"/v1/chat/completions", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("content-type", "application/json")
-
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("ollama: %w", err)
+	if key != "" {
+		req.Header.Set("Authorization", "Bearer "+key)
 	}
-	defer resp.Body.Close()
+	req.Header.Set("content-type", "application/json")
 
 	var out struct {
 		Choices []struct {
@@ -161,59 +181,51 @@ func (c *Client) askOllama(ctx context.Context, prompt string) (string, error) {
 				Content string `json:"content"`
 			} `json:"message"`
 		} `json:"choices"`
-		Error struct {
-			Message string `json:"message"`
-		} `json:"error"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := c.do(req, name, &out); err != nil {
 		return "", err
 	}
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("ollama: %s", out.Error.Message)
-	}
 	if len(out.Choices) == 0 {
-		return "", fmt.Errorf("ollama: empty response")
+		return "", fmt.Errorf("%s: empty response", name)
 	}
 	return out.Choices[0].Message.Content, nil
 }
 
-func (c *Client) askOpenAI(ctx context.Context, prompt string) (string, error) {
-	body, _ := json.Marshal(map[string]any{
-		"model":    "gpt-4o",
-		"messages": []map[string]string{{"role": "user", "content": prompt}},
-	})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		"https://api.openai.com/v1/chat/completions", bytes.NewReader(body))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Authorization", "Bearer "+c.openaiKey)
-	req.Header.Set("content-type", "application/json")
-
+// do sends req and decodes a successful JSON response into out. Failures
+// report the HTTP status and the provider's error message, or the start of
+// the body when it isn't JSON (e.g. an HTML error page from a proxy), rather
+// than a bare JSON decode error.
+func (c *Client) do(req *http.Request, name string, out any) error {
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return "", err
+		return fmt.Errorf("%s: %w", name, err)
 	}
 	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if err != nil {
+		return fmt.Errorf("%s: read response: %w", name, err)
+	}
 
-	var out struct {
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
-		Error struct {
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return "", err
-	}
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("openai: %s", out.Error.Message)
+		var e struct {
+			Error struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		msg := ""
+		if json.Unmarshal(body, &e) == nil {
+			msg = e.Error.Message
+		}
+		if msg == "" {
+			msg = strings.TrimSpace(string(body))
+			if len(msg) > 200 {
+				msg = msg[:200] + "…"
+			}
+		}
+		return fmt.Errorf("%s: HTTP %d: %s", name, resp.StatusCode, msg)
 	}
-	if len(out.Choices) == 0 {
-		return "", fmt.Errorf("openai: empty response")
+	if err := json.Unmarshal(body, out); err != nil {
+		return fmt.Errorf("%s: unexpected response: %w", name, err)
 	}
-	return out.Choices[0].Message.Content, nil
+	return nil
 }

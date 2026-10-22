@@ -248,12 +248,14 @@ func runDashboard() {
 		log.Println("mTLS enabled — agents must present a certificate signed by the dashboard CA")
 	}
 
-	aiClient := ai.New(
-		os.Getenv("ANTHROPIC_API_KEY"),
-		os.Getenv("OPENAI_API_KEY"),
-		os.Getenv("OLLAMA_BASE_URL"),
-		os.Getenv("OLLAMA_MODEL"),
-	)
+	aiClient := ai.New(ai.Config{
+		AnthropicKey:   os.Getenv("ANTHROPIC_API_KEY"),
+		AnthropicModel: os.Getenv("ANTHROPIC_MODEL"),
+		OpenAIKey:      os.Getenv("OPENAI_API_KEY"),
+		OpenAIModel:    os.Getenv("OPENAI_MODEL"),
+		OllamaURL:      os.Getenv("OLLAMA_BASE_URL"),
+		OllamaModel:    os.Getenv("OLLAMA_MODEL"),
+	})
 	if aiClient.Available() {
 		log.Printf("AI assistant enabled — %s", aiClient.Provider())
 	}
@@ -286,8 +288,7 @@ func runDashboard() {
 
 	persistPath := filepath.Join(*dataDir, "agents.json")
 	state := dashboard.NewState(persistPath)
-	notify := make(chan struct{}, 16)
-	poller := dashboard.NewPoller(state, *pollInterval, notify, dashCfg.TLS, cfg)
+	poller := dashboard.NewPoller(state, *pollInterval, dashCfg.TLS, cfg)
 
 	dashCfg.Cfg = cfg
 
@@ -296,7 +297,7 @@ func runDashboard() {
 		log.Fatalf("embed: %v", err)
 	}
 
-	dash, err := dashboard.NewDashboard(state, poller, notify, webFS, dashCfg)
+	dash, err := dashboard.NewDashboard(state, poller, webFS, dashCfg)
 	if err != nil {
 		log.Fatalf("dashboard: %v", err)
 	}

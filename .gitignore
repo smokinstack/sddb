@@ -11,3 +11,7 @@ certs/
 
 # runtime state
 agents.json
+
+# local secrets and per-server compose overrides
+.env
+docker-compose.override.yml

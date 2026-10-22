@@ -1,7 +1,6 @@
 package dashboard
 
 import (
-	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -10,8 +9,11 @@ import (
 	"io"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -28,7 +30,6 @@ import (
 type Dashboard struct {
 	state     *State
 	poller    *Poller
-	notify    chan struct{}
 	tmpl      *template.Template
 	webFS     fs.FS
 	agentPort int
@@ -36,6 +37,9 @@ type Dashboard struct {
 	agentHTTP *http.Client // shared client for logs/commands (see newAgentClient)
 	// extra origins allowed to make changes (SDDB_TRUSTED_ORIGINS; see origin.go)
 	trustedOrigins []string
+	// proxies whose X-Forwarded-For is believed for login rate limiting,
+	// besides loopback (SDDB_TRUSTED_PROXIES; see ratelimit.go)
+	trustedProxies []*net.IPNet
 	credsMu        sync.RWMutex
 	creds          *auth.Credentials
 	sessions       *auth.Sessions
@@ -56,15 +60,17 @@ type Config struct {
 	Cfg       *config.Store
 }
 
-func NewDashboard(state *State, poller *Poller, notify chan struct{}, webFS fs.FS, cfg Config) (*Dashboard, error) {
+func NewDashboard(state *State, poller *Poller, webFS fs.FS, cfg Config) (*Dashboard, error) {
 	tmpl, err := loadTemplates(webFS)
 	if err != nil {
 		return nil, err
 	}
+	if cfg.Cfg != nil {
+		tmpl.Funcs(template.FuncMap{"protected": cfg.Cfg.IsProtected})
+	}
 	d := &Dashboard{
 		state:     state,
 		poller:    poller,
-		notify:    notify,
 		tmpl:      tmpl,
 		webFS:     webFS,
 		agentPort: cfg.AgentPort,
@@ -78,6 +84,7 @@ func NewDashboard(state *State, poller *Poller, notify chan struct{}, webFS fs.F
 	}
 	d.limiter = newLoginLimiter()
 	d.trustedOrigins = trustedOriginsFromEnv()
+	d.trustedProxies = parseTrustedProxies(os.Getenv("SDDB_TRUSTED_PROXIES"))
 	return d, nil
 }
 
@@ -104,7 +111,6 @@ func (d *Dashboard) Handler() http.Handler {
 	mux.HandleFunc("/api/ai", d.handleAI)
 	mux.HandleFunc("/api/config", d.handleConfig)
 	mux.HandleFunc("/api/ntfy/test", d.handleNtfyTest)
-	mux.HandleFunc("/events", d.handleSSE)
 
 	return d.sameOrigin(d.requireAuth(mux))
 }
@@ -153,7 +159,7 @@ func (d *Dashboard) handleLogin(w http.ResponseWriter, r *http.Request) {
 	d.credsMu.RUnlock()
 
 	if r.Method == http.MethodPost {
-		ip := clientIP(r)
+		ip := clientIP(r, d.trustedProxies)
 		if limiter != nil && !limiter.allowed(ip) {
 			w.WriteHeader(http.StatusTooManyRequests)
 			d.tmpl.ExecuteTemplate(w, "login.html", map[string]string{"Error": "Too many failed attempts — try again later"})
@@ -244,25 +250,30 @@ func (d *Dashboard) handleSidebarFragment(w http.ResponseWriter, r *http.Request
 func (d *Dashboard) handleLogs(w http.ResponseWriter, r *http.Request) {
 	agentAddr := r.URL.Query().Get("agent")
 	containerID := r.URL.Query().Get("container")
-	tail := r.URL.Query().Get("tail")
 	if agentAddr == "" || containerID == "" {
 		http.Error(w, "agent and container required", http.StatusBadRequest)
 		return
 	}
-	if tail == "" {
-		tail = "100"
-	}
+	tail := types.LogTail(r.URL.Query().Get("tail"))
 
 	// Validate agent address is a registered agent to prevent SSRF.
-	if _, ok := d.state.Get(agentAddr); !ok {
+	agent, ok := d.state.Get(agentAddr)
+	if !ok {
 		http.Error(w, "unknown agent", http.StatusBadRequest)
+		return
+	}
+	// Only containers the agent reported, like commands; the ID used in the
+	// agent URL then comes from the agent, not from the request.
+	match := findContainer(agent.LastStats.Containers, containerID)
+	if match == nil {
+		http.Error(w, "unknown container", http.StatusBadRequest)
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	url := fmt.Sprintf("%s://%s/api/containers/%s/logs?tail=%s", agentScheme(d.tlsConfig), agentAddr, containerID, tail)
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	target := fmt.Sprintf("%s://%s/api/containers/%s/logs?tail=%d", agentScheme(d.tlsConfig), agentAddr, url.PathEscape(match.ID), tail)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	resp, err := d.agentHTTP.Do(req)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
@@ -270,7 +281,7 @@ func (d *Dashboard) handleLogs(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	io.Copy(w, resp.Body)
+	io.Copy(w, io.LimitReader(resp.Body, types.MaxLogBytes))
 }
 
 func (d *Dashboard) handleNtfyTest(w http.ResponseWriter, r *http.Request) {
@@ -323,12 +334,13 @@ func (d *Dashboard) handleConfig(w http.ResponseWriter, r *http.Request) {
 			providers = d.ai.AvailableProviders()
 		}
 		writeJSON(w, map[string]any{
-			"ai_provider":         cfg.AIProvider,
-			"auto_update":         cfg.AutoUpdate,
-			"available_providers": providers,
-			"ntfy_url":            cfg.NtfyURL,
-			"ntfy_disabled":       cfg.NtfyDisabled,
-			"ntfy_disabled_hosts": cfg.NtfyDisabledHosts,
+			"ai_provider":          cfg.AIProvider,
+			"auto_update":          cfg.AutoUpdate,
+			"available_providers":  providers,
+			"ntfy_url":             cfg.NtfyURL,
+			"ntfy_disabled":        cfg.NtfyDisabled,
+			"ntfy_disabled_hosts":  cfg.NtfyDisabledHosts,
+			"protected_containers": cfg.ProtectedContainers,
 		})
 
 	case http.MethodPatch:
@@ -341,6 +353,7 @@ func (d *Dashboard) handleConfig(w http.ResponseWriter, r *http.Request) {
 				Addr string `json:"addr"`
 				Name string `json:"name"`
 			} `json:"toggle_auto_update"`
+			ToggleProtected *string `json:"toggle_protected"` // container name
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "bad request", http.StatusBadRequest)
@@ -366,6 +379,14 @@ func (d *Dashboard) handleConfig(w http.ResponseWriter, r *http.Request) {
 				key := req.ToggleAutoUpdate.Addr + "::" + req.ToggleAutoUpdate.Name
 				c.AutoUpdate[key] = !c.AutoUpdate[key]
 			}
+			if req.ToggleProtected != nil && *req.ToggleProtected != "" {
+				name := *req.ToggleProtected
+				if i := slices.Index(c.ProtectedContainers, name); i >= 0 {
+					c.ProtectedContainers = slices.Delete(c.ProtectedContainers, i, i+1)
+				} else {
+					c.ProtectedContainers = append(c.ProtectedContainers, name)
+				}
+			}
 		}); err != nil {
 			http.Error(w, "save failed: "+err.Error(), http.StatusInternalServerError)
 			return
@@ -376,12 +397,13 @@ func (d *Dashboard) handleConfig(w http.ResponseWriter, r *http.Request) {
 			providers = d.ai.AvailableProviders()
 		}
 		writeJSON(w, map[string]any{
-			"ai_provider":         cfg.AIProvider,
-			"auto_update":         cfg.AutoUpdate,
-			"available_providers": providers,
-			"ntfy_url":            cfg.NtfyURL,
-			"ntfy_disabled":       cfg.NtfyDisabled,
-			"ntfy_disabled_hosts": cfg.NtfyDisabledHosts,
+			"ai_provider":          cfg.AIProvider,
+			"auto_update":          cfg.AutoUpdate,
+			"available_providers":  providers,
+			"ntfy_url":             cfg.NtfyURL,
+			"ntfy_disabled":        cfg.NtfyDisabled,
+			"ntfy_disabled_hosts":  cfg.NtfyDisabledHosts,
+			"protected_containers": cfg.ProtectedContainers,
 		})
 
 	default:
@@ -472,12 +494,12 @@ func (d *Dashboard) handleAI(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	provider := d.cfg.Get().AIProvider
-	result, err := d.ai.AskWithProvider(ctx, prompt, provider)
+	result, used, err := d.ai.AskWithProvider(ctx, prompt, provider)
 	if err != nil {
-		writeJSON(w, map[string]string{"error": err.Error()})
+		writeJSON(w, map[string]string{"error": err.Error(), "provider": used})
 		return
 	}
-	writeJSON(w, map[string]string{"result": result})
+	writeJSON(w, map[string]string{"result": result, "provider": used})
 }
 
 func (d *Dashboard) handleMainFragment(w http.ResponseWriter, r *http.Request) {
@@ -621,14 +643,7 @@ func (d *Dashboard) handleCommand(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Resolve container ID to a known container; fail closed if not found.
-	var match *types.ContainerState
-	for i := range agent.LastStats.Containers {
-		c := &agent.LastStats.Containers[i]
-		if c.ID == req.ContainerID || c.ShortID == req.ContainerID || c.Name == req.ContainerID {
-			match = c
-			break
-		}
-	}
+	match := findContainer(agent.LastStats.Containers, req.ContainerID)
 	if match == nil {
 		http.Error(w, "unknown container", http.StatusBadRequest)
 		return
@@ -645,10 +660,14 @@ func (d *Dashboard) handleCommand(w http.ResponseWriter, r *http.Request) {
 	if req.Action == "upgrade" || req.Action == "pull" {
 		timeout = 15 * time.Minute
 	}
+	if req.Action == "stop" || req.Action == "restart" || req.Action == "upgrade" {
+		d.poller.notifier.ExpectStop(req.AgentAddr, match.Name)
+	}
+
 	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
-	url := fmt.Sprintf("%s://%s/api/containers/%s/%s", agentScheme(d.tlsConfig), req.AgentAddr, req.ContainerID, req.Action)
-	agentReq, _ := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
+	target := fmt.Sprintf("%s://%s/api/containers/%s/%s", agentScheme(d.tlsConfig), req.AgentAddr, url.PathEscape(match.ID), req.Action)
+	agentReq, _ := http.NewRequestWithContext(ctx, http.MethodPost, target, nil)
 	resp, err := d.agentHTTP.Do(agentReq)
 	if err != nil {
 		writeJSON(w, types.CommandResponse{Success: false, Message: err.Error()})
@@ -664,44 +683,6 @@ func (d *Dashboard) handleCommand(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(time.Second)
 		d.poller.PollNow(context.Background(), req.AgentAddr)
 	}()
-}
-
-// handleSSE pushes a "refresh" event to connected browsers whenever new stats arrive.
-func (d *Dashboard) handleSSE(w http.ResponseWriter, r *http.Request) {
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-
-	// Send an initial ping
-	fmt.Fprintf(w, "event: connected\ndata: ok\n\n")
-	flusher.Flush()
-
-	for {
-		select {
-		case <-r.Context().Done():
-			return
-		case <-d.notify:
-			// Render the dashboard fragment and send it as an SSE event
-			var buf bytes.Buffer
-			if err := d.tmpl.ExecuteTemplate(&buf, "dashboard.html", d.templateData(d.state.All())); err != nil {
-				log.Printf("SSE template error: %v", err)
-				continue
-			}
-			// SSE data cannot contain raw newlines — encode as a series of "data:" lines
-			lines := strings.Split(buf.String(), "\n")
-			for _, line := range lines {
-				fmt.Fprintf(w, "data: %s\n", line)
-			}
-			fmt.Fprintf(w, "\n")
-			flusher.Flush()
-		}
-	}
 }
 
 // TemplateAgentData is passed to dashboard templates.
@@ -721,15 +702,18 @@ func (d *Dashboard) templateData(agents []*AgentRecord) TemplateAgentData {
 
 func loadTemplates(webFS fs.FS) (*template.Template, error) {
 	funcMap := template.FuncMap{
-		"formatBytes":       formatBytes,
-		"formatRate":        formatRate,
-		"formatPercent":     formatPercent,
-		"stateClass":        stateClass,
-		"stateBadge":        stateBadge,
-		"since":             since,
-		"sinceRFC":          sinceRFC,
-		"recentExit":        recentExit,
-		"add":               func(a, b int) int { return a + b },
+		"formatBytes":   formatBytes,
+		"formatRate":    formatRate,
+		"formatPercent": formatPercent,
+		"stateClass":    stateClass,
+		"stateBadge":    stateBadge,
+		"since":         since,
+		"sinceRFC":      sinceRFC,
+		"recentExit":    recentExit,
+		"add":           func(a, b int) int { return a + b },
+		// protected reports whether a container is exempt from start/stop/
+		// restart/upgrade; NewDashboard swaps in the real config lookup.
+		"protected":         func(string) bool { return false },
 		"itoa":              strconv.Itoa,
 		"cpuColor":          cpuColor,
 		"memColor":          memColor,
@@ -799,6 +783,17 @@ func filteredSorted(cs []types.ContainerState, running bool) []types.ContainerSt
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
+}
+
+// findContainer looks a container up by full ID, short ID or name.
+func findContainer(cs []types.ContainerState, ref string) *types.ContainerState {
+	for i := range cs {
+		c := &cs[i]
+		if c.ID == ref || c.ShortID == ref || c.Name == ref {
+			return c
+		}
+	}
+	return nil
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
