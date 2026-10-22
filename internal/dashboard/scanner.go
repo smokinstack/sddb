@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -29,7 +30,6 @@ func ScanNetwork(ctx context.Context, cidr string, agentPort int, concurrency in
 	}
 
 	results := make(chan ScanResult, len(ips))
-	sem := make(chan struct{}, concurrency)
 
 	// One transport for the whole scan, without keep-alives: each probe is a
 	// one-off request, and a transport per probe would leak its connection.
@@ -37,24 +37,36 @@ func ScanNetwork(ctx context.Context, cidr string, agentPort int, concurrency in
 	transport.DisableKeepAlives = true
 	client := &http.Client{Timeout: 2 * time.Second, Transport: transport}
 
+	// A fixed pool of workers. Starting one goroutine per address (as
+	// before) meant ~65,000 goroutines at once for a /16, all but
+	// `concurrency` of them just waiting their turn.
+	work := make(chan string)
 	var wg sync.WaitGroup
-	for _, ip := range ips {
-		ip := ip
+	for i := 0; i < max(concurrency, 1); i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-
-			addr := fmt.Sprintf("%s:%d", ip, agentPort)
-			if result, ok := probeAgent(ctx, addr, agentScheme(tlsCfg), client); ok {
-				select {
-				case results <- result:
-				case <-ctx.Done():
+			for ip := range work {
+				addr := net.JoinHostPort(ip, strconv.Itoa(agentPort))
+				if result, ok := probeAgent(ctx, addr, agentScheme(tlsCfg), client); ok {
+					select {
+					case results <- result:
+					case <-ctx.Done():
+					}
 				}
 			}
 		}()
 	}
+	go func() {
+		defer close(work)
+		for _, ip := range ips {
+			select {
+			case work <- ip:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
 
 	go func() {
 		wg.Wait()

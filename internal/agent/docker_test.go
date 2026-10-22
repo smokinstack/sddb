@@ -31,3 +31,11 @@ func TestDiskUsageMatchesDf(t *testing.T) {
 		t.Fatalf("disk = %.1f%%, want ~95.3%% like df (old formula gave %.1f%%)", pct, float64(blocks-free)/float64(blocks)*100)
 	}
 }
+
+func TestForgetGoneContainers(t *testing.T) {
+	d := &DockerClient{prevStats: map[string]prevNetStats{"old": {}, "kept": {}}}
+	d.forgetGone(map[string]bool{"kept": true, "new": true})
+	if _, ok := d.prevStats["old"]; ok || len(d.prevStats) != 1 {
+		t.Fatalf("prevStats = %v, want only the container still present", d.prevStats)
+	}
+}

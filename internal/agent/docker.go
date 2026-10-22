@@ -76,7 +76,26 @@ func (d *DockerClient) CollectAll(ctx context.Context) ([]types.ContainerState, 
 		}
 		states = append(states, r.state)
 	}
+
+	present := make(map[string]bool, len(containers))
+	for _, c := range containers {
+		present[c.ID] = true
+	}
+	d.forgetGone(present)
 	return states, nil
+}
+
+// forgetGone drops rate-calculation samples for containers that no longer
+// exist. Every recreated container has a new ID, so without this the map
+// grew for as long as the agent ran (noticeably on a busy dev host).
+func (d *DockerClient) forgetGone(present map[string]bool) {
+	d.prevMu.Lock()
+	defer d.prevMu.Unlock()
+	for id := range d.prevStats {
+		if !present[id] {
+			delete(d.prevStats, id)
+		}
+	}
 }
 
 func (d *DockerClient) containerState(ctx context.Context, c dockertypes.Container) (types.ContainerState, error) {
