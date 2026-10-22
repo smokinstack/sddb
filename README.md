@@ -653,6 +653,7 @@ sddb-dashboard enroll <name>     issue an mTLS certificate for an agent
 | `-poll` | `5s` | — | Agent poll interval |
 | `-agent-port` | `8484` | — | Default port for network scan and bare-IP adds |
 | `-data-dir` | `~/.sddb` | — | Data directory (PKI, config, agent list) |
+| — | — | `SDDB_TRUSTED_PROXIES` | Proxies whose `X-Forwarded-For` is trusted for login rate limiting, besides loopback: comma-separated IPs or CIDRs, e.g. `172.16.0.0/12` when Caddy runs in a container. See Security notes |
 | — | — | `SDDB_TRUSTED_ORIGINS` | Extra origins allowed to make changes, comma-separated (e.g. `https://sddb.example.com`). Only needed behind a reverse proxy that rewrites the `Host` header without setting `X-Forwarded-Host`; see Security notes |
 
 ### Agent flags
@@ -816,7 +817,7 @@ The session cookie's `Secure` flag is set automatically based on whether the req
 
 - The dashboard **will not start** without a configured admin account. Run `set-admin` before the first launch.
 - The agent **will not start** without TLS certificates. Run `enroll` on the dashboard host and copy the resulting cert files to each agent host before starting the agent service.
-- The login endpoint rate-limits by IP: **5 failed attempts within 15 minutes** triggers a 15-minute lockout. The counter resets on a successful login. Forwarded headers (`X-Forwarded-For`) are only trusted when the connection comes from loopback — direct connections always use the real remote IP.
+- The login endpoint rate-limits by IP: **5 failed attempts within 15 minutes** triggers a 15-minute lockout. The counter resets on a successful login. `X-Forwarded-For` is only believed when the connection comes from a trusted proxy — loopback, or an address listed in `SDDB_TRUSTED_PROXIES` — and is read from the right, so a client can't dodge the lockout by sending a fake address. Direct connections always use the real remote IP. **If Caddy (or another proxy) runs in its own container**, set `SDDB_TRUSTED_PROXIES` to the Docker network (e.g. `172.16.0.0/12`); otherwise every login appears to come from the proxy, and five wrong passwords from anyone lock everyone out.
 - The session cookie is `HttpOnly` and `SameSite=Strict`, and also `Secure` when the dashboard is reached over HTTPS (directly or via a proxy that sets `X-Forwarded-Proto: https`). Over plain HTTP the login and session travel unencrypted — fine on a trusted LAN; use Caddy (or another TLS proxy) when exposing the dashboard more widely.
 - Requests that change anything (POST, PATCH, DELETE) are rejected if a browser sent them from another origin. `SameSite=Strict` alone doesn't cover this: browsers treat every port on the same host as the same site, so another web app on the dashboard's host could otherwise act with your session. The dashboard's own address is recognised from the `Host` header or `X-Forwarded-Host`; if a reverse proxy rewrites `Host` without setting `X-Forwarded-Host` and actions fail with "cross-origin request blocked", list the public address in `SDDB_TRUSTED_ORIGINS`.
 - mTLS ensures only agents with certificates signed by your CA can communicate with the dashboard, and agents only accept requests from the dashboard's own certificate, so a key copied from one agent host can't control the others. Each agent host must be enrolled separately.

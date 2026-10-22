@@ -9,8 +9,10 @@ import (
 	"io"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"slices"
 	"sort"
 	"strconv"
@@ -35,6 +37,9 @@ type Dashboard struct {
 	agentHTTP *http.Client // shared client for logs/commands (see newAgentClient)
 	// extra origins allowed to make changes (SDDB_TRUSTED_ORIGINS; see origin.go)
 	trustedOrigins []string
+	// proxies whose X-Forwarded-For is believed for login rate limiting,
+	// besides loopback (SDDB_TRUSTED_PROXIES; see ratelimit.go)
+	trustedProxies []*net.IPNet
 	credsMu        sync.RWMutex
 	creds          *auth.Credentials
 	sessions       *auth.Sessions
@@ -79,6 +84,7 @@ func NewDashboard(state *State, poller *Poller, webFS fs.FS, cfg Config) (*Dashb
 	}
 	d.limiter = newLoginLimiter()
 	d.trustedOrigins = trustedOriginsFromEnv()
+	d.trustedProxies = parseTrustedProxies(os.Getenv("SDDB_TRUSTED_PROXIES"))
 	return d, nil
 }
 
@@ -153,7 +159,7 @@ func (d *Dashboard) handleLogin(w http.ResponseWriter, r *http.Request) {
 	d.credsMu.RUnlock()
 
 	if r.Method == http.MethodPost {
-		ip := clientIP(r)
+		ip := clientIP(r, d.trustedProxies)
 		if limiter != nil && !limiter.allowed(ip) {
 			w.WriteHeader(http.StatusTooManyRequests)
 			d.tmpl.ExecuteTemplate(w, "login.html", map[string]string{"Error": "Too many failed attempts — try again later"})
