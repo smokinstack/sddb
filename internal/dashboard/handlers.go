@@ -112,7 +112,7 @@ func (d *Dashboard) Handler() http.Handler {
 	mux.HandleFunc("/api/config", d.handleConfig)
 	mux.HandleFunc("/api/ntfy/test", d.handleNtfyTest)
 
-	return d.sameOrigin(d.requireAuth(mux))
+	return securityHeaders(d.sameOrigin(d.requireAuth(mux)))
 }
 
 func isSecure(r *http.Request) bool {

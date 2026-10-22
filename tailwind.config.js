@@ -5,8 +5,11 @@
 module.exports = {
   content: [
     './cmd/dashboard/web/templates/**/*.html',
-    // Go template helpers return class names (status colours, badges).
-    './internal/dashboard/**/*.go',
+    // Go template helpers that return class names (status colours, badges).
+    // Only this file: scanning every Go file picks up ordinary words in code
+    // and comments ("inline", "hidden"…) as classes, so any comment edit
+    // would change app.css and fail CI's freshness check.
+    './internal/dashboard/handlers.go',
   ],
   theme: { extend: {} },
   plugins: [],
