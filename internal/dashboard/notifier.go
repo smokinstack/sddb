@@ -42,7 +42,7 @@ type containerAlert struct {
 }
 
 const (
-	loopThreshold    = 2               // crash events within loopWindow triggers suppression
+	loopThreshold    = 2 // crash events within loopWindow triggers suppression
 	loopWindow       = 15 * time.Minute
 	alertCooldown    = 5 * time.Minute  // minimum gap between individual crash alerts
 	recoveryDuration = 10 * time.Minute // stable run required before clearing suppression

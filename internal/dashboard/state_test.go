@@ -1,0 +1,124 @@
+package dashboard
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/smokinstack/sddb/internal/config"
+	"github.com/smokinstack/sddb/internal/types"
+)
+
+// fakeAgent is a plain-HTTP stand-in for sddb-agent.
+func fakeAgent(t *testing.T) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/containers":
+			json.NewEncoder(w).Encode(types.StatsResponse{Agent: types.AgentInfo{ID: "agent-1"}})
+		case strings.HasSuffix(r.URL.Path, "/logs"):
+			w.Write([]byte("log line\n"))
+		default:
+			json.NewEncoder(w).Encode(types.CommandResponse{Success: true, Message: "ok"})
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func newTestDashboard(t *testing.T, agentAddr string) *Dashboard {
+	t.Helper()
+	cfg, err := config.Load(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := NewState("")
+	state.AddAgent(agentAddr, "")
+	notify := make(chan struct{}, 1)
+	poller := NewPoller(state, time.Hour, notify, nil, cfg)
+	return &Dashboard{
+		state:     state,
+		poller:    poller,
+		notify:    notify,
+		cfg:       cfg,
+		agentHTTP: newAgentClient(nil),
+		limiter:   newLoginLimiter(),
+	}
+}
+
+func statsWith(id string, containers ...types.ContainerState) types.StatsResponse {
+	return types.StatsResponse{Agent: types.AgentInfo{ID: id}, Containers: containers}
+}
+
+// Commands and log requests must not touch the agent map while the poller is
+// re-keying it (agent IDs change whenever an agent restarts). Before the fix
+// this was an unlocked map read racing a map write, which Go can turn into a
+// fatal "concurrent map read and map write" crash of the whole dashboard.
+// Run with -race.
+func TestHandlersDoNotRaceWithPollUpdates(t *testing.T) {
+	agent := fakeAgent(t)
+	addr := strings.TrimPrefix(agent.URL, "http://")
+	d := newTestDashboard(t, addr)
+
+	ctr := types.ContainerState{ID: "abc123abc123def", ShortID: "abc123abc123", Name: "web", State: "running"}
+	d.state.UpdateFromPoll(addr, statsWith("id-0", ctr))
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; ; i++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			// Changing ID forces UpdateFromPoll to delete and re-insert the map entry.
+			d.state.UpdateFromPoll(addr, statsWith(fmt.Sprintf("id-%d", i), ctr))
+		}
+	}()
+
+	for i := 0; i < 200; i++ {
+		body, _ := json.Marshal(map[string]string{"agent_addr": addr, "container_id": "web", "action": "restart"})
+		rec := httptest.NewRecorder()
+		d.handleCommand(rec, httptest.NewRequest(http.MethodPost, "/api/command", bytes.NewReader(body)))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("command: status %d: %s", rec.Code, rec.Body.String())
+		}
+
+		rec = httptest.NewRecorder()
+		d.handleLogs(rec, httptest.NewRequest(http.MethodGet, "/api/logs?agent="+addr+"&container=web", nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("logs: status %d: %s", rec.Code, rec.Body.String())
+		}
+	}
+	close(stop)
+	wg.Wait()
+}
+
+func TestStateGetReturnsIndependentCopy(t *testing.T) {
+	s := NewState("")
+	s.AddAgent("h:1", "")
+	s.UpdateFromPoll("h:1", statsWith("a", types.ContainerState{Name: "one"}))
+
+	got, ok := s.Get("h:1")
+	if !ok || len(got.LastStats.Containers) != 1 {
+		t.Fatalf("Get = %+v, %v", got, ok)
+	}
+	got.LastStats.Containers[0].Name = "mutated"
+
+	again, _ := s.Get("h:1")
+	if again.LastStats.Containers[0].Name != "one" {
+		t.Fatal("Get must return a copy; caller mutation leaked into state")
+	}
+	if _, ok := s.Get("nope:1"); ok {
+		t.Fatal("unknown address should not be found")
+	}
+}

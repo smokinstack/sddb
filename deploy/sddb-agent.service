@@ -24,7 +24,13 @@ RestartSec=5s
 # Basic hardening
 NoNewPrivileges=true
 ProtectSystem=strict
-ProtectHome=true
+# Compose upgrades run `docker compose` in each project's directory, and those
+# often live under /home (e.g. /home/you/plex). ProtectHome=true would hide them
+# and make every compose upgrade fail, so home directories are read-only here.
+# The sddb user also needs read access to those project directories: Ubuntu
+# creates home directories as 0750, so either add sddb to the owner's group
+# (sudo usermod -aG <owner> sddb) or keep compose projects outside /home.
+ProtectHome=read-only
 ReadWritePaths=/etc/sddb
 
 [Install]

@@ -20,8 +20,8 @@ type ContainerState struct {
 
 	// CPU & memory
 	CPUPercent float64 `json:"cpu_percent"`
-	MemUsage   uint64  `json:"mem_usage"`  // bytes
-	MemLimit   uint64  `json:"mem_limit"`  // bytes
+	MemUsage   uint64  `json:"mem_usage"` // bytes
+	MemLimit   uint64  `json:"mem_limit"` // bytes
 	MemPercent float64 `json:"mem_percent"`
 
 	// Network rates (bytes/sec computed by agent)
@@ -74,6 +74,27 @@ type StatsResponse struct {
 	Host       HostStats        `json:"host"`
 	Containers []ContainerState `json:"containers"`
 	Timestamp  int64            `json:"timestamp"`
+
+	// Jobs holds the latest background upgrade/pull per container name.
+	// Finished jobs are kept for an hour so the dashboard can show results.
+	Jobs map[string]JobStatus `json:"jobs,omitempty"`
+}
+
+// Job states reported in JobStatus.State.
+const (
+	JobRunning   = "running"
+	JobSucceeded = "succeeded"
+	JobFailed    = "failed"
+)
+
+// JobStatus describes a long-running container action (upgrade or pull)
+// that the agent runs in the background, detached from the HTTP request.
+type JobStatus struct {
+	Action   string `json:"action"` // "upgrade" or "pull"
+	State    string `json:"state"`  // JobRunning, JobSucceeded or JobFailed
+	Error    string `json:"error,omitempty"`
+	Started  int64  `json:"started"`            // unix seconds
+	Finished int64  `json:"finished,omitempty"` // unix seconds; 0 while running
 }
 
 // CommandRequest is sent to POST /api/containers/{id}/{action}.
@@ -87,4 +108,7 @@ type CommandRequest struct {
 type CommandResponse struct {
 	Success bool   `json:"success"`
 	Message string `json:"message"`
+	// Pending is true when the action was accepted and is running in the
+	// background (upgrade, pull); its outcome is reported in StatsResponse.Jobs.
+	Pending bool `json:"pending,omitempty"`
 }

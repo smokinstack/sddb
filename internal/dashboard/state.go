@@ -70,7 +70,7 @@ func (s *State) UpdateFromPoll(addr string, resp types.StatsResponse) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	r, ok := s.findByAddr(addr)
+	r, ok := s.findByAddrLocked(addr)
 	if !ok {
 		return
 	}
@@ -94,7 +94,7 @@ func (s *State) MarkOffline(addr, errMsg string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	r, ok := s.findByAddr(addr)
+	r, ok := s.findByAddrLocked(addr)
 	if !ok {
 		return
 	}
@@ -154,7 +154,24 @@ func (s *State) Addresses() []string {
 	return addrs
 }
 
-func (s *State) findByAddr(addr string) (*AgentRecord, bool) {
+// Get returns a snapshot of the agent registered at addr. The returned record
+// is a copy (including its container list), so callers can read it without
+// holding the state lock.
+func (s *State) Get(addr string) (AgentRecord, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	r, ok := s.findByAddrLocked(addr)
+	if !ok {
+		return AgentRecord{}, false
+	}
+	cp := *r
+	cp.LastStats.Containers = append([]types.ContainerState(nil), r.LastStats.Containers...)
+	return cp, true
+}
+
+// findByAddrLocked looks up an agent by address. The caller must hold s.mu.
+func (s *State) findByAddrLocked(addr string) (*AgentRecord, bool) {
 	for _, r := range s.agents {
 		if r.Addr == addr {
 			return r, true

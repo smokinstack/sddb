@@ -25,6 +25,9 @@ import (
 //go:embed web
 var webFiles embed.FS
 
+// version is set at build time via -ldflags "-X main.version=...".
+var version = "dev"
+
 func main() {
 	// Detect subcommands before flag parsing so we can use separate flag sets.
 	if len(os.Args) > 1 {
@@ -40,6 +43,9 @@ func main() {
 			return
 		case "help", "--help", "-h":
 			printUsage()
+			return
+		case "version", "--version", "-version":
+			fmt.Println("sddb-dashboard", version)
 			return
 		}
 	}
@@ -303,13 +309,16 @@ func runDashboard() {
 	srv := &http.Server{
 		Addr:    *addr,
 		Handler: dash.Handler(),
+		// No WriteTimeout: network scans stream their results.
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       2 * time.Minute,
 	}
 	go func() {
 		<-ctx.Done()
 		srv.Shutdown(context.Background())
 	}()
 
-	log.Printf("dashboard listening on %s", *addr)
+	log.Printf("sddb-dashboard %s listening on %s", version, *addr)
 	if err := srv.ListenAndServe(); err != http.ErrServerClosed {
 		log.Fatalf("server: %v", err)
 	}
@@ -371,6 +380,7 @@ Usage:
   sddb-dashboard set-admin [flags]    create or update the admin account
   sddb-dashboard reset-admin [flags]  reset the admin password
   sddb-dashboard enroll <name>        issue an mTLS certificate for an agent
+  sddb-dashboard version              print the version
 
 Dashboard flags:
   -addr        listen address (default :8080)
