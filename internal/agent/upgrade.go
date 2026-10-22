@@ -11,34 +11,32 @@ import (
 	"strings"
 	"time"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/mount"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/client"
 	dockerspec "github.com/moby/docker-image-spec/specs-go/v1"
-	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/client"
 )
 
 // dockerAPI is the subset of the Docker client used to pull images and
 // recreate containers. *client.Client satisfies it; tests use a fake.
 type dockerAPI interface {
-	ContainerInspect(ctx context.Context, containerID string) (container.InspectResponse, error)
-	ContainerCreate(ctx context.Context, config *container.Config, hostConfig *container.HostConfig, networkingConfig *network.NetworkingConfig, platform *ocispec.Platform, containerName string) (container.CreateResponse, error)
-	ContainerStart(ctx context.Context, containerID string, options container.StartOptions) error
-	ContainerStop(ctx context.Context, containerID string, options container.StopOptions) error
-	ContainerRemove(ctx context.Context, containerID string, options container.RemoveOptions) error
-	ContainerRename(ctx context.Context, containerID, newContainerName string) error
-	NetworkConnect(ctx context.Context, networkID, containerID string, config *network.EndpointSettings) error
-	ImagePull(ctx context.Context, refStr string, options image.PullOptions) (io.ReadCloser, error)
-	ImageInspect(ctx context.Context, imageID string, inspectOpts ...client.ImageInspectOption) (image.InspectResponse, error)
+	ContainerInspect(ctx context.Context, containerID string, options client.ContainerInspectOptions) (client.ContainerInspectResult, error)
+	ContainerCreate(ctx context.Context, options client.ContainerCreateOptions) (client.ContainerCreateResult, error)
+	ContainerStart(ctx context.Context, containerID string, options client.ContainerStartOptions) (client.ContainerStartResult, error)
+	ContainerStop(ctx context.Context, containerID string, options client.ContainerStopOptions) (client.ContainerStopResult, error)
+	ContainerRemove(ctx context.Context, containerID string, options client.ContainerRemoveOptions) (client.ContainerRemoveResult, error)
+	ContainerRename(ctx context.Context, containerID string, options client.ContainerRenameOptions) (client.ContainerRenameResult, error)
+	NetworkConnect(ctx context.Context, networkID string, options client.NetworkConnectOptions) (client.NetworkConnectResult, error)
+	ImagePull(ctx context.Context, refStr string, options client.ImagePullOptions) (client.ImagePullResponse, error)
+	ImageInspect(ctx context.Context, imageID string, inspectOpts ...client.ImageInspectOption) (client.ImageInspectResult, error)
 }
 
 // pullImage pulls ref and waits for the pull to finish. The pull runs as a
 // stream: closing it early cancels the pull, and errors (auth, not found,
 // network) are reported inside the stream rather than as the call's error.
 func pullImage(ctx context.Context, api dockerAPI, ref string) error {
-	rc, err := api.ImagePull(ctx, ref, image.PullOptions{})
+	rc, err := api.ImagePull(ctx, ref, client.ImagePullOptions{})
 	if err != nil {
 		return fmt.Errorf("pull %s: %w", ref, err)
 	}
@@ -125,7 +123,7 @@ func upgradeCLI(ctx context.Context, api dockerAPI, info container.InspectRespon
 	wasRunning := info.State != nil && info.State.Running
 
 	backup := fmt.Sprintf("%s-sddb-old-%d", name, time.Now().Unix())
-	if err := api.ContainerRename(ctx, info.ID, backup); err != nil {
+	if _, err := api.ContainerRename(ctx, info.ID, client.ContainerRenameOptions{NewName: backup}); err != nil {
 		return fmt.Errorf("rename old container: %w", err)
 	}
 
@@ -136,15 +134,15 @@ func upgradeCLI(ctx context.Context, api dockerAPI, info container.InspectRespon
 		defer cancel()
 		var errs []error
 		if newID != "" {
-			if err := api.ContainerRemove(rctx, newID, container.RemoveOptions{Force: true}); err != nil {
+			if _, err := api.ContainerRemove(rctx, newID, client.ContainerRemoveOptions{Force: true}); err != nil {
 				errs = append(errs, fmt.Errorf("remove new container: %w", err))
 			}
 		}
-		if err := api.ContainerRename(rctx, info.ID, name); err != nil {
+		if _, err := api.ContainerRename(rctx, info.ID, client.ContainerRenameOptions{NewName: name}); err != nil {
 			errs = append(errs, fmt.Errorf("rename old container back: %w", err))
 		}
 		if oldStopped {
-			if err := api.ContainerStart(rctx, info.ID, container.StartOptions{}); err != nil {
+			if _, err := api.ContainerStart(rctx, info.ID, client.ContainerStartOptions{}); err != nil {
 				errs = append(errs, fmt.Errorf("restart old container: %w", err))
 			}
 		}
@@ -154,12 +152,17 @@ func upgradeCLI(ctx context.Context, api dockerAPI, info container.InspectRespon
 		return fmt.Errorf("%w (rolled back to the previous container)", cause)
 	}
 
-	created, err := api.ContainerCreate(ctx, &cfg, &hostCfg, netCfg, nil, name)
+	created, err := api.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Config:           &cfg,
+		HostConfig:       &hostCfg,
+		NetworkingConfig: netCfg,
+		Name:             name,
+	})
 	if err != nil {
 		return rollback("", fmt.Errorf("create: %w", err))
 	}
 	for netName, ep := range extraNets {
-		if err := api.NetworkConnect(ctx, netName, created.ID, ep); err != nil {
+		if _, err := api.NetworkConnect(ctx, netName, client.NetworkConnectOptions{Container: created.ID, EndpointConfig: ep}); err != nil {
 			return rollback(created.ID, fmt.Errorf("connect network %s: %w", netName, err))
 		}
 	}
@@ -168,15 +171,15 @@ func upgradeCLI(ctx context.Context, api dockerAPI, info container.InspectRespon
 		// Treat the old container as stopped even if Stop errors part-way, so
 		// rollback always tries to bring it back up.
 		oldStopped = true
-		if err := api.ContainerStop(ctx, info.ID, container.StopOptions{Timeout: &timeout}); err != nil {
+		if _, err := api.ContainerStop(ctx, info.ID, client.ContainerStopOptions{Timeout: &timeout}); err != nil {
 			return rollback(created.ID, fmt.Errorf("stop old container: %w", err))
 		}
-		if err := api.ContainerStart(ctx, created.ID, container.StartOptions{}); err != nil {
+		if _, err := api.ContainerStart(ctx, created.ID, client.ContainerStartOptions{}); err != nil {
 			return rollback(created.ID, fmt.Errorf("start: %w", err))
 		}
 	}
 
-	if err := api.ContainerRemove(ctx, info.ID, container.RemoveOptions{}); err != nil {
+	if _, err := api.ContainerRemove(ctx, info.ID, client.ContainerRemoveOptions{}); err != nil {
 		// The upgrade itself succeeded; just report the leftover.
 		log.Printf("upgrade %s: new container is running but the previous one (%s) could not be removed: %v", name, backup, err)
 	}

@@ -1,6 +1,16 @@
 package agent
 
-import "testing"
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strings"
+	"testing"
+
+	"github.com/moby/moby/client"
+	"github.com/smokinstack/sddb/internal/types"
+)
 
 func TestCounterRate(t *testing.T) {
 	cases := []struct {
@@ -37,5 +47,34 @@ func TestForgetGoneContainers(t *testing.T) {
 	d.forgetGone(map[string]bool{"kept": true, "new": true})
 	if _, ok := d.prevStats["old"]; ok || len(d.prevStats) != 1 {
 		t.Fatalf("prevStats = %v, want only the container still present", d.prevStats)
+	}
+}
+
+// The CPU percentage needs two samples a second apart (PreCPUStats). The
+// daemon only takes them when the stats request is stream=false WITHOUT
+// one-shot=true; with one-shot, every container reads 0% CPU. This checks the
+// request the agent actually sends, via a fake Engine API.
+func TestStatsRequestAsksForPreviousSample(t *testing.T) {
+	var statsQuery url.Values
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Api-Version", "1.47")
+		if strings.HasSuffix(r.URL.Path, "/stats") {
+			statsQuery = r.URL.Query()
+		}
+		w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+
+	cli, err := client.New(client.WithHost("tcp://"+strings.TrimPrefix(srv.URL, "http://")), client.WithAPIVersionNegotiation())
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := &DockerClient{cli: cli, api: cli, prevStats: map[string]prevNetStats{}}
+	state := types.ContainerState{ID: "abc"}
+	if err := d.fillStats(context.Background(), &state); err != nil {
+		t.Fatal(err)
+	}
+	if statsQuery.Get("stream") != "false" || statsQuery.Has("one-shot") {
+		t.Fatalf("stats query = %v; want stream=false and no one-shot (else CPU always reads 0%%)", statsQuery)
 	}
 }

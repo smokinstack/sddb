@@ -10,11 +10,9 @@ import (
 	"sync"
 	"time"
 
-	dockertypes "github.com/docker/docker/api/types"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/client"
-	"github.com/docker/docker/pkg/stdcopy"
+	"github.com/moby/moby/api/pkg/stdcopy"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/client"
 	"github.com/smokinstack/sddb/internal/types"
 )
 
@@ -50,10 +48,11 @@ func (d *DockerClient) Close() { d.cli.Close() }
 
 // CollectAll lists all containers and gathers their stats concurrently.
 func (d *DockerClient) CollectAll(ctx context.Context) ([]types.ContainerState, error) {
-	containers, err := d.cli.ContainerList(ctx, container.ListOptions{All: true})
+	list, err := d.cli.ContainerList(ctx, client.ContainerListOptions{All: true})
 	if err != nil {
 		return nil, fmt.Errorf("list containers: %w", err)
 	}
+	containers := list.Items
 
 	type result struct {
 		state types.ContainerState
@@ -62,7 +61,7 @@ func (d *DockerClient) CollectAll(ctx context.Context) ([]types.ContainerState, 
 	results := make(chan result, len(containers))
 
 	for _, c := range containers {
-		go func(c dockertypes.Container) {
+		go func(c container.Summary) {
 			state, err := d.containerState(ctx, c)
 			results <- result{state, err}
 		}(c)
@@ -98,7 +97,7 @@ func (d *DockerClient) forgetGone(present map[string]bool) {
 	}
 }
 
-func (d *DockerClient) containerState(ctx context.Context, c dockertypes.Container) (types.ContainerState, error) {
+func (d *DockerClient) containerState(ctx context.Context, c container.Summary) (types.ContainerState, error) {
 	var name string
 	if len(c.Names) > 0 {
 		name = strings.TrimPrefix(c.Names[0], "/")
@@ -111,7 +110,7 @@ func (d *DockerClient) containerState(ctx context.Context, c dockertypes.Contain
 		Image:   c.Image,
 		ImageID: c.ImageID,
 		Status:  c.Status,
-		State:   c.State,
+		State:   string(c.State),
 		Created: c.Created,
 		Ports:   formatPorts(c.Ports),
 		// Compose labels
@@ -121,14 +120,15 @@ func (d *DockerClient) containerState(ctx context.Context, c dockertypes.Contain
 		ComposeWorkDir: c.Labels["com.docker.compose.project.working_dir"],
 	}
 
-	if c.State == "running" {
+	if c.State == container.StateRunning {
 		if err := d.fillStats(ctx, &state); err != nil {
 			// non-fatal; leave stats at zero
 		}
 	}
 
 	// Inspect for restart/exit details — fast local socket call, non-fatal
-	if info, err := d.cli.ContainerInspect(ctx, c.ID); err == nil {
+	if res, err := d.cli.ContainerInspect(ctx, c.ID, client.ContainerInspectOptions{}); err == nil {
+		info := res.Container
 		state.RestartCount = info.RestartCount
 		if info.State != nil {
 			state.ExitCode = info.State.ExitCode
@@ -144,7 +144,11 @@ func (d *DockerClient) fillStats(ctx context.Context, state *types.ContainerStat
 	statsCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	resp, err := d.cli.ContainerStats(statsCtx, state.ID, false)
+	// IncludePreviousSample makes the daemon take two samples a second apart,
+	// filling PreCPUStats for the CPU calculation below. (The old client's
+	// ContainerStats(…, stream=false) did this implicitly; without it CPU
+	// would always read 0%.)
+	resp, err := d.cli.ContainerStats(statsCtx, state.ID, client.ContainerStatsOptions{IncludePreviousSample: true})
 	if err != nil {
 		return err
 	}
@@ -235,28 +239,32 @@ func counterRate(cur, prev uint64, seconds float64) float64 {
 
 // StartContainer starts a stopped container.
 func (d *DockerClient) StartContainer(ctx context.Context, id string) error {
-	return d.cli.ContainerStart(ctx, id, container.StartOptions{})
+	_, err := d.cli.ContainerStart(ctx, id, client.ContainerStartOptions{})
+	return err
 }
 
 // StopContainer stops a running container.
 func (d *DockerClient) StopContainer(ctx context.Context, id string) error {
 	timeout := 10
-	return d.cli.ContainerStop(ctx, id, container.StopOptions{Timeout: &timeout})
+	_, err := d.cli.ContainerStop(ctx, id, client.ContainerStopOptions{Timeout: &timeout})
+	return err
 }
 
 // RestartContainer restarts a container.
 func (d *DockerClient) RestartContainer(ctx context.Context, id string) error {
 	timeout := 10
-	return d.cli.ContainerRestart(ctx, id, container.StopOptions{Timeout: &timeout})
+	_, err := d.cli.ContainerRestart(ctx, id, client.ContainerRestartOptions{Timeout: &timeout})
+	return err
 }
 
 // UpgradeContainer pulls the latest image and recreates the container.
 // It detects whether the container was started via Compose or bare CLI.
 func (d *DockerClient) UpgradeContainer(ctx context.Context, id string) error {
-	info, err := d.api.ContainerInspect(ctx, id)
+	res, err := d.api.ContainerInspect(ctx, id, client.ContainerInspectOptions{})
 	if err != nil {
 		return fmt.Errorf("inspect: %w", err)
 	}
+	info := res.Container
 
 	if info.Config.Labels["com.docker.compose.project"] != "" {
 		return d.upgradeCompose(ctx, info)
@@ -267,11 +275,11 @@ func (d *DockerClient) UpgradeContainer(ctx context.Context, id string) error {
 // PullImage pulls the latest version of the container's image without
 // recreating the container.
 func (d *DockerClient) PullImage(ctx context.Context, id string) error {
-	info, err := d.api.ContainerInspect(ctx, id)
+	res, err := d.api.ContainerInspect(ctx, id, client.ContainerInspectOptions{})
 	if err != nil {
 		return fmt.Errorf("inspect: %w", err)
 	}
-	return pullImage(ctx, d.api, info.Config.Image)
+	return pullImage(ctx, d.api, res.Container.Config.Image)
 }
 
 func (d *DockerClient) upgradeCompose(ctx context.Context, info container.InspectResponse) error {
@@ -289,18 +297,19 @@ func (d *DockerClient) upgradeCompose(ctx context.Context, info container.Inspec
 
 // PruneImages removes dangling images.
 func (d *DockerClient) PruneImages(ctx context.Context) error {
-	_, err := d.cli.ImagesPrune(ctx, filters.Args{})
+	_, err := d.cli.ImagePrune(ctx, client.ImagePruneOptions{}) // no filters: dangling images only
 	return err
 }
 
 // GetLogs returns the last `tail` lines of stdout+stderr for a container.
 func (d *DockerClient) GetLogs(ctx context.Context, containerID, tail string) (string, error) {
-	info, err := d.cli.ContainerInspect(ctx, containerID)
+	res, err := d.cli.ContainerInspect(ctx, containerID, client.ContainerInspectOptions{})
 	if err != nil {
 		return "", fmt.Errorf("inspect: %w", err)
 	}
+	info := res.Container
 
-	rc, err := d.cli.ContainerLogs(ctx, containerID, container.LogsOptions{
+	rc, err := d.cli.ContainerLogs(ctx, containerID, client.ContainerLogsOptions{
 		ShowStdout: true,
 		ShowStderr: true,
 		Tail:       tail,
@@ -322,7 +331,7 @@ func (d *DockerClient) GetLogs(ctx context.Context, containerID, tail string) (s
 	return buf.String(), nil
 }
 
-func formatPorts(ports []dockertypes.Port) []string {
+func formatPorts(ports []container.PortSummary) []string {
 	seen := make(map[string]struct{})
 	var result []string
 	for _, p := range ports {
