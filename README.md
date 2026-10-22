@@ -399,7 +399,9 @@ Each expanded container card has two AI buttons:
 - **Logs → Analyze** — opens the log viewer, fetches recent log output, sends it to the AI, and asks it to summarise errors, warnings, and anything unusual.
 - **Health** — sends the container name, image, and current state to the AI and asks it to assess whether the container appears healthy.
 
-The AI response is shown in a modal. No data is stored or logged — each request is a direct, one-shot API call from the dashboard server to the AI provider.
+The AI response is shown in a modal, which names the provider and model that handled it. No data is stored or logged by the dashboard — each request is a direct, one-shot API call from the dashboard server to the AI provider.
+
+> **Privacy:** **Analyze** sends up to the last 150 lines of the container's logs to the provider, and **Health** sends its name, image, ports and resource usage. With Claude or OpenAI that data leaves your network and is handled under that provider's data policy; logs can contain hostnames, IP addresses, usernames or tokens. Use Ollama to keep everything on your own hardware.
 
 ### Configuring providers
 
@@ -450,6 +452,8 @@ AI assistant enabled — Claude (Anthropic)
 | `OPENAI_API_KEY` | ChatGPT | Get from platform.openai.com |
 | `OLLAMA_BASE_URL` | Ollama | URL of your Ollama server, e.g. `http://192.168.1.50:11434` |
 | `OLLAMA_MODEL` | Ollama | Model name, e.g. `llama3.2`. Defaults to `llama3.2` if not set |
+| `ANTHROPIC_MODEL` | Claude | Model name. Defaults to `claude-sonnet-5-5` if not set |
+| `OPENAI_MODEL` | OpenAI | Model name. Defaults to `gpt-4o` if not set |
 
 ### Selecting a provider
 

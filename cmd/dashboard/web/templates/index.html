@@ -690,6 +690,10 @@
           body: JSON.stringify(body),
         });
         const data = await res.json();
+        // Say where the container's data was sent.
+        if (data.provider) {
+          document.getElementById('ai-subtitle').textContent = `${subtitle} · sent to ${data.provider}`;
+        }
         if (!res.ok || data.error) throw new Error(data.error || res.statusText);
         _aiRaw = data.result;
         document.getElementById('ai-content').textContent = _aiRaw;

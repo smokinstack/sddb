@@ -494,12 +494,12 @@ func (d *Dashboard) handleAI(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	provider := d.cfg.Get().AIProvider
-	result, err := d.ai.AskWithProvider(ctx, prompt, provider)
+	result, used, err := d.ai.AskWithProvider(ctx, prompt, provider)
 	if err != nil {
-		writeJSON(w, map[string]string{"error": err.Error()})
+		writeJSON(w, map[string]string{"error": err.Error(), "provider": used})
 		return
 	}
-	writeJSON(w, map[string]string{"result": result})
+	writeJSON(w, map[string]string{"result": result, "provider": used})
 }
 
 func (d *Dashboard) handleMainFragment(w http.ResponseWriter, r *http.Request) {
